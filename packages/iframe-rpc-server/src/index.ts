@@ -1,5 +1,9 @@
 export type CreateIframeRpcServerOptions = {
   name: string
+  // Idle time-to-live (TTL) for returned handles (functions/objects). Defaults to 10 minutes.
+  handleTtlMs?: number
+  // How often to run the sweeping task that evicts expired handles. Defaults to 60 seconds.
+  sweepIntervalMs?: number
 }
 
 type RpcMessage =
@@ -36,10 +40,22 @@ type RpcMessage =
       type: 'INIT_ERROR'
       error: string
     }
+  | {
+      rpc: 'iframe-rpc'
+      name: string
+      type: 'RELEASE_HANDLE'
+      handle: string
+    }
 
 export function createIframeRpcServer<TApi extends Record<string, any>>(api: TApi, options: CreateIframeRpcServerOptions) {
   const { name } = options
   const handles = new Map<string, any>()
+  const handleMeta = new Map<string, { lastUsed: number }>()
+
+  const DEFAULT_TTL = 10 * 60 * 1000 // 10 minutes
+  const DEFAULT_SWEEP = 60 * 1000 // 60 seconds
+  const ttlMs = Math.max(0, options.handleTtlMs ?? DEFAULT_TTL)
+  const sweepMs = Math.max(0, options.sweepIntervalMs ?? DEFAULT_SWEEP)
 
   function genId() {
     return `${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -100,6 +116,7 @@ export function createIframeRpcServer<TApi extends Record<string, any>>(api: TAp
     if (!hasFunctions) return result
     const id = genId()
     handles.set(id, result)
+    handleMeta.set(id, { lastUsed: Date.now() })
     if (typeof result === 'function') {
       return { __rpc__: 'handle', id, kind: 'function' }
     }
@@ -155,10 +172,16 @@ export function createIframeRpcServer<TApi extends Record<string, any>>(api: TAp
       // Determine call context: root API or a returned handle
       const ctx = handle ? handles.get(handle) : api
       if (handle && !ctx) {
+        try { console.log(`[rpc-server:${name}] call on missing handle ${handle}`) } catch {}
         const errMsg = `Handle ${handle} not found`
         const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'ERROR', id, error: errMsg }
-        ;(event.source as Window).postMessage(msg, '*')
+        source.postMessage(msg, '*')
         return
+      }
+      // Update last-used timestamp for handle on every call
+      if (handle) {
+        const meta = handleMeta.get(handle)
+        if (meta) meta.lastUsed = Date.now()
       }
       const fn = method ? getDeep(ctx as any, method) : ctx
       if (typeof fn !== 'function') {
@@ -178,5 +201,28 @@ export function createIframeRpcServer<TApi extends Record<string, any>>(api: TAp
       }
       return
     }
+
+    if (data.type === 'RELEASE_HANDLE') {
+      const id = data.handle
+      if (id) {
+        handles.delete(id)
+        handleMeta.delete(id)
+      }
+      return
+    }
   })
+
+  // Periodic sweeper to evict idle handles based on TTL
+  if (ttlMs > 0 && sweepMs > 0) {
+    setInterval(() => {
+      const now = Date.now()
+      for (const [id, meta] of handleMeta.entries()) {
+        if (now - meta.lastUsed > ttlMs) {
+          try { console.log(`[rpc-server:${name}] evict handle ${id} due to ttl ${ttlMs}ms`) } catch {}
+          handleMeta.delete(id)
+          handles.delete(id)
+        }
+      }
+    }, sweepMs)
+  }
 }

@@ -16,6 +16,10 @@
 - 支持并发：多个调用互不干扰，按 `id` 关联结果
  - 支持嵌套对象与嵌套返回：值深度复刻（剔除函数），函数以“点路径”暴露（如 `nested.test`）；同时支持“函数返回对象（包含函数）”“函数返回函数”等场景，客户端会为返回值创建临时代理并继续调用
  - 初始化错误提示与超时：服务端初始广播失败会发送 `INIT_ERROR`；客户端支持握手超时（可配置），在失败或超时时明确提示
+ - 返回值句柄释放：函数返回对象/函数时会创建“临时句柄”（handle）；支持显式释放与自动释放，避免句柄长期常驻
+
+- 页面生命周期策略：客户端支持 `releaseOnPageHide: 'nonPersisted' | 'all' | 'off'`（默认 `nonPersisted`）；`beforeunload` 始终批量释放
+- 服务端闲置 TTL 清理：支持配置 `handleTtlMs` 与 `sweepIntervalMs`，对长时间未使用的句柄进行定期回收
 
 ## 安装
 
@@ -65,6 +69,10 @@ console.log(await myApi.nested.test(1)) // 11
 const nestedObj = await myApi.testNested(1)
 console.log(nestedObj.a) // 1001
 console.log(await nestedObj.test(1)) // 1001
+
+// 释放返回值句柄（对象或函数）
+;(nestedObj as any).__release() // 显式释放，后续调用会直接报错
+// 例如：await nestedObj.test(1) // -> Promise.reject(Error('Handle ... released'))
 ```
 
 > 注意：客户端初始化是异步的，需要 `await`。所有函数均以 `Promise` 返回。
@@ -74,6 +82,46 @@ console.log(await nestedObj.test(1)) // 1001
 ```ts
 // 默认超时 5000ms，可自定义
 const myApi = await createIframeRpcClient('testApi', { timeout: 8000 })
+```
+
+### 页面生命周期策略（client）
+
+客户端在页面隐藏或离开时可配置释放策略，用于在 BFCache 等场景下保持或释放返回值句柄：
+
+```ts
+import { createIframeRpcClient } from 'iframe-rpc-client'
+
+// 默认策略（nonPersisted）：仅在非 BFCache 的 pagehide 上释放
+const apiDefault = await createIframeRpcClient('testApi', { releaseOnPageHide: 'nonPersisted' })
+
+// 始终在 pagehide 释放（包括 BFCache）：
+const apiAll = await createIframeRpcClient('testApi', { releaseOnPageHide: 'all' })
+
+// 不在 pagehide 释放（适合希望 BFCache 恢复后继续使用已有代理）：
+const apiOff = await createIframeRpcClient('testApi', { releaseOnPageHide: 'off' })
+
+// 说明：
+// - BFCache 场景下，pagehide 事件对象的 ev.persisted === true
+// - 无论策略如何，beforeunload 始终作为兜底批量释放句柄
+```
+
+### 服务端闲置 TTL 清理（server）
+
+为防止返回值句柄长期占用内存，服务端支持基于“闲置 TTL”的定期清理：
+
+```ts
+import { createIframeRpcServer } from 'iframe-rpc-server'
+
+createIframeRpcServer(api, {
+  name: 'testApi',
+  handleTtlMs: 10 * 60 * 1000,   // 句柄闲置超时（默认 10 分钟）
+  sweepIntervalMs: 60 * 1000     // 清扫周期（默认 60 秒）
+})
+
+// 行为说明：
+// - 返回对象/函数时会创建句柄，并记录 lastUsed 时间戳
+// - 每次基于句柄的调用都会刷新 lastUsed
+// - 清扫器会定期删除超过 TTL 的句柄；此后再次调用该句柄会返回 ERROR: Handle <id> not found
 ```
 
 ## TypeScript 支持
@@ -157,6 +205,42 @@ type MyApi = Promisified<TestApi> // 深度 Promise 化，嵌套函数也映射�
 - `RESULT`/`ERROR`：服务端返回结果或错误，与请求 `id` 对应
   - 当结果中包含函数（或结果本身是函数）时，服务端返回一个“句柄包装”对象：`{ __rpc__: 'handle', id, kind: 'object'|'function', values, functions }`。客户端基于此创建临时代理继续调用；调用时会在消息中附带 `handle: id` 指向该返回值上下文。
  - `INIT_ERROR`：服务端初始 `READY` 广播失败时发送，包含错误消息字符串；客户端收到后直接拒绝初始化 Promise
+  - `RELEASE_HANDLE`：客户端在不再需要某返回值代理时发送，服务端删除对应 `handle`。删除后再次调用会返回错误；客户端同时在本地立即拒绝对已释放句柄的调用。
+
+## 句柄生命周期与释放
+
+- 何为“句柄”：当某次调用返回对象（且对象中含函数）或直接返回函数时，服务端不会把函数本体透传给客户端，而是返回一个“句柄包装”并在服务端保存该返回值。客户端据此构建临时代理继续调用。
+- 生命周期：默认“调用后常驻”。为避免泄漏，提供两种释放方式：
+  - 显式释放：在对象/函数代理上调用 `__release()`，会发送 `RELEASE_HANDLE` 消息并在客户端标记为已释放。
+  - 自动释放：如果运行环境支持 `FinalizationRegistry`，当代理对象被 GC 时会自动发送释放请求。
+  - 弱引用轮询释放（降级）：在不支持 `FinalizationRegistry` 但支持 `WeakRef` 的环境下，客户端将以低频率轮询弱引用；当代理对象被 GC，自动发送 `RELEASE_HANDLE`。
+  - 页面生命周期兜底：在 `beforeunload/pagehide` 事件触发时，客户端会批量释放所有活跃句柄，避免页面退出造成未释放。
+- 释放后的行为：
+  - 客户端对已释放句柄的再次调用会立即返回 `Promise.reject(Error('Handle ... released'))`，无需等待服务端响应。
+  - 如果仍然向服务端发送了调用消息（例如跨环境未及时同步），服务端也会返回 `ERROR: Handle <id> not found`。
+
+### 页面生命周期与 BFCache
+
+- `pagehide`：页面被隐藏时触发，可能是正常导航/关闭，也可能是进入 BFCache。事件对象上 `ev.persisted === true` 表示进入 BFCache。
+- 客户端策略 `releaseOnPageHide`：
+  - `'nonPersisted'`（默认）：仅在 `persisted:false` 时释放句柄，进入 BFCache 时不释放，页面恢复后代理仍可用。
+  - `'all'`：无论是否 BFCache，`pagehide` 都释放句柄；恢复后需重新获取代理。
+  - `'off'`：不在 `pagehide` 释放（但 `beforeunload` 仍释放）。
+- 兜底 `beforeunload`：在页面真正卸载前触发，不会在 BFCache 情况出现；客户端始终在该事件上批量释放句柄。
+
+示例：
+
+```ts
+const obj = await myApi.testNested(5)
+console.log(await obj.test(1)) // 6
+;(obj as any).__release()      // 显式释放
+await obj.test(1)              // -> rejects with Error('Handle ... released')
+
+const fn = await myApi.mkAdder(2)
+console.log(await fn(3))       // 5
+;(fn as any).__release()       // 释放函数句柄
+await fn(3)                    // -> rejects
+```
 
 ## 安全与跨域
 

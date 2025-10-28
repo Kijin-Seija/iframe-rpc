@@ -5,18 +5,27 @@ import type { TestApi } from '../src/types'
 
 class FakeWindow {
   listeners: ((e: MessageEvent) => void)[] = []
+  otherListeners: Record<string, ((e: any) => void)[]> = {}
   counterpart: FakeWindow | null = null
   parent: FakeWindow = this
 
   constructor(public name: string) {}
 
-  addEventListener(type: string, handler: (e: MessageEvent) => void) {
-    if (type === 'message') this.listeners.push(handler)
+  addEventListener(type: string, handler: (e: any) => void) {
+    if (type === 'message') this.listeners.push(handler as any)
+    else {
+      const arr = this.otherListeners[type] || []
+      arr.push(handler)
+      this.otherListeners[type] = arr
+    }
   }
 
-  removeEventListener(type: string, handler: (e: MessageEvent) => void) {
+  removeEventListener(type: string, handler: (e: any) => void) {
     if (type === 'message') {
       this.listeners = this.listeners.filter((h) => h !== handler)
+    } else {
+      const arr = this.otherListeners[type] || []
+      this.otherListeners[type] = arr.filter((h) => h !== handler)
     }
   }
 
@@ -24,6 +33,12 @@ class FakeWindow {
     const source = this.counterpart ?? this
     const event = { data, source } as unknown as MessageEvent
     this.listeners.forEach((h) => h(event))
+  }
+
+  dispatch(type: string, evt?: any) {
+    const handlers = this.otherListeners[type] || []
+    const e = Object.assign({ type }, evt || {}) as any
+    handlers.forEach((h) => h(e))
   }
 }
 
@@ -241,6 +256,263 @@ describe('iframe-rpc 集成测试', () => {
       const add2 = await client.mkAdder(2)
       const r = await add2(3)
       expect(r).toBe(5)
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('释放对象句柄后再次调用报错', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<TestApi>('release-obj')
+
+      ;(globalThis as any).window = child as any
+      const api: TestApi = {
+        a: 1,
+        test: (n: number) => n + 1,
+        nested: { a: 2, test: (n: number) => n + 10, nested: { a: 3, test: (n: number) => n + 100 } },
+        testNested: (param: number) => ({ a: param, test: (n: number) => n + param }),
+        mkAdder: (x: number) => (y: number) => x + y,
+        makeObj: (seed: number) => ({ val: seed, nested: { val: seed + 1, fn: (n: number) => n + seed, deeper: { val: seed + 2, fn2: (n: number) => n + seed * 2 } }, fn: (n: number) => ({ val: n + seed, deepFn: (m: number) => m + n + seed }) }),
+      }
+      createIframeRpcServer(api as any, { name: 'release-obj' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      const obj = await client.testNested(5)
+      const r1 = await obj.test(1)
+      expect(r1).toBe(6)
+      // release
+      ;(obj as any).__release()
+      // after release, further calls should error
+      await expect(obj.test(1)).rejects.toThrow('Handle')
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('释放函数句柄后再次调用报错', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<{ mkAdder: (x: number) => (y: number) => number }>('release-fn')
+
+      ;(globalThis as any).window = child as any
+      const api = { mkAdder: (x: number) => (y: number) => x + y }
+      createIframeRpcServer(api as any, { name: 'release-fn' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      const add2 = await client.mkAdder(2)
+      const r = await add2(3)
+      expect(r).toBe(5)
+      ;(add2 as any).__release()
+      await expect(add2(3)).rejects.toThrow('Handle')
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('WeakRef 轮询释放在 deref 为 undefined 时触发释放', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    const originalWeakRef = (globalThis as any).WeakRef
+    class MockWeakRef<T> {
+      static forceNull = false
+      private obj: T | null
+      constructor(obj: T) { this.obj = obj }
+      deref() { return (MockWeakRef.forceNull ? undefined : this.obj) as any }
+    }
+    try {
+      ;(globalThis as any).WeakRef = MockWeakRef as any
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<TestApi>('weakref-release', { gcSweepIntervalMs: 10 })
+
+      ;(globalThis as any).window = child as any
+      const api: TestApi = {
+        a: 1,
+        test: (n: number) => n + 1,
+        nested: { a: 2, test: (n: number) => n + 10, nested: { a: 3, test: (n: number) => n + 100 } },
+        testNested: (param: number) => ({ a: param, test: (n: number) => n + param }),
+        mkAdder: (x: number) => (y: number) => x + y,
+        makeObj: (seed: number) => ({ val: seed, nested: { val: seed + 1, fn: (n: number) => n + seed, deeper: { val: seed + 2, fn2: (n: number) => n + seed * 2 } }, fn: (n: number) => ({ val: n + seed, deepFn: (m: number) => m + n + seed }) }),
+      }
+      createIframeRpcServer(api as any, { name: 'weakref-release' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      const obj = await client.testNested(5)
+      const r1 = await obj.test(1)
+      expect(r1).toBe(6)
+
+      // 模拟 GC：让 WeakRef.deref() 返回 undefined
+      MockWeakRef.forceNull = true
+      await new Promise((res) => setTimeout(res, 20))
+      await expect(obj.test(1)).rejects.toThrow('Handle')
+    } finally {
+      ;(globalThis as any).WeakRef = originalWeakRef
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('pagehide 触发批量释放后再次调用报错', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<TestApi>('pagehide-release')
+
+      ;(globalThis as any).window = child as any
+      const api: TestApi = {
+        a: 1,
+        test: (n: number) => n + 1,
+        nested: { a: 2, test: (n: number) => n + 10, nested: { a: 3, test: (n: number) => n + 100 } },
+        testNested: (param: number) => ({ a: param, test: (n: number) => n + param }),
+        mkAdder: (x: number) => (y: number) => x + y,
+        makeObj: (seed: number) => ({ val: seed, nested: { val: seed + 1, fn: (n: number) => n + seed, deeper: { val: seed + 2, fn2: (n: number) => n + seed * 2 } }, fn: (n: number) => ({ val: n + seed, deepFn: (m: number) => m + n + seed }) }),
+      }
+      createIframeRpcServer(api as any, { name: 'pagehide-release' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      const obj = await client.testNested(5)
+      const r1 = await obj.test(1)
+      expect(r1).toBe(6)
+      // 触发 pagehide 事件，客户端应批量释放所有活跃句柄
+      parent.dispatch('pagehide', { persisted: false })
+      await expect(obj.test(1)).rejects.toThrow('Handle')
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('pagehide persisted:true 默认 nonPersisted 不释放', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<TestApi>('pagehide-nonpersisted-default')
+
+      ;(globalThis as any).window = child as any
+      const api: TestApi = {
+        a: 1,
+        test: (n: number) => n + 1,
+        nested: { a: 2, test: (n: number) => n + 10, nested: { a: 3, test: (n: number) => n + 100 } },
+        testNested: (param: number) => ({ a: param, test: (n: number) => n + param }),
+        mkAdder: (x: number) => (y: number) => x + y,
+        makeObj: (seed: number) => ({ val: seed, nested: { val: seed + 1, fn: (n: number) => n + seed, deeper: { val: seed + 2, fn2: (n: number) => n + seed * 2 } }, fn: (n: number) => ({ val: n + seed, deepFn: (m: number) => m + n + seed }) }),
+      }
+      createIframeRpcServer(api as any, { name: 'pagehide-nonpersisted-default' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      const obj = await client.testNested(5)
+      const r1 = await obj.test(1)
+      expect(r1).toBe(6)
+      // 模拟 BFCache：persisted=true 时默认不释放
+      parent.dispatch('pagehide', { persisted: true })
+      const r2 = await obj.test(1)
+      expect(r2).toBe(6)
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('pagehide persisted:true 在策略 all 下会释放', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<TestApi>('pagehide-all', { releaseOnPageHide: 'all' })
+
+      ;(globalThis as any).window = child as any
+      const api: TestApi = {
+        a: 1,
+        test: (n: number) => n + 1,
+        nested: { a: 2, test: (n: number) => n + 10, nested: { a: 3, test: (n: number) => n + 100 } },
+        testNested: (param: number) => ({ a: param, test: (n: number) => n + param }),
+        mkAdder: (x: number) => (y: number) => x + y,
+        makeObj: (seed: number) => ({ val: seed, nested: { val: seed + 1, fn: (n: number) => n + seed, deeper: { val: seed + 2, fn2: (n: number) => n + seed * 2 } }, fn: (n: number) => ({ val: n + seed, deepFn: (m: number) => m + n + seed }) }),
+      }
+      createIframeRpcServer(api as any, { name: 'pagehide-all' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      const obj = await client.testNested(5)
+      const r1 = await obj.test(1)
+      expect(r1).toBe(6)
+      // 在 all 策略下，persisted=true 也释放
+      parent.dispatch('pagehide', { persisted: true })
+      await expect(obj.test(1)).rejects.toThrow('Handle')
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('pagehide persisted:false 在策略 off 下不释放', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<TestApi>('pagehide-off', { releaseOnPageHide: 'off' })
+
+      ;(globalThis as any).window = child as any
+      const api: TestApi = {
+        a: 1,
+        test: (n: number) => n + 1,
+        nested: { a: 2, test: (n: number) => n + 10, nested: { a: 3, test: (n: number) => n + 100 } },
+        testNested: (param: number) => ({ a: param, test: (n: number) => n + param }),
+        mkAdder: (x: number) => (y: number) => x + y,
+        makeObj: (seed: number) => ({ val: seed, nested: { val: seed + 1, fn: (n: number) => n + seed, deeper: { val: seed + 2, fn2: (n: number) => n + seed * 2 } }, fn: (n: number) => ({ val: n + seed, deepFn: (m: number) => m + n + seed }) }),
+      }
+      createIframeRpcServer(api as any, { name: 'pagehide-off' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      const obj = await client.testNested(5)
+      const r1 = await obj.test(1)
+      expect(r1).toBe(6)
+      // 在 off 策略下，persisted=false 也不释放
+      parent.dispatch('pagehide', { persisted: false })
+      const r2 = await obj.test(1)
+      expect(r2).toBe(6)
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('服务端闲置 TTL 清理后句柄过期调用报错', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<TestApi>('rpc-ttl')
+
+      ;(globalThis as any).window = child as any
+      const api: TestApi = {
+        a: 1,
+        test: (n: number) => n + 1,
+        nested: { a: 2, test: (n: number) => n + 10, nested: { a: 3, test: (n: number) => n + 100 } },
+        testNested: (param: number) => ({ a: param, test: (n: number) => n + param }),
+        mkAdder: (x: number) => (y: number) => x + y,
+        makeObj: (seed: number) => ({ val: seed, nested: { val: seed + 1, fn: (n: number) => n + seed, deeper: { val: seed + 2, fn2: (n: number) => n + seed * 2 } }, fn: (n: number) => ({ val: n + seed, deepFn: (m: number) => m + n + seed }) }),
+      }
+      createIframeRpcServer(api as any, { name: 'rpc-ttl', handleTtlMs: 20, sweepIntervalMs: 5 })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      const obj = await client.testNested(5)
+      const r1 = await obj.test(1)
+      expect(r1).toBe(6)
+
+      // 等待超过 TTL，让服务端清理闲置句柄
+      await new Promise((r) => setTimeout(r, 50))
+
+      // 过期后再次调用应报错（服务端返回 Handle not found）
+      await expect(obj.test(1)).rejects.toThrow('Handle')
     } finally {
       ;(globalThis as any).window = original
     }
