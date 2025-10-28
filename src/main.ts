@@ -1,0 +1,57 @@
+import { createIframeRpcClient } from '../packages/iframe-rpc-client/src/index'
+import type { TestApi } from './types'
+
+const app = document.querySelector<HTMLDivElement>('#app')!
+app.innerHTML = `
+  <div>
+    <h1>iframe-rpc 调试页（外层）</h1>
+    <iframe id="demo-iframe" src="/iframe.html" style="width:100%;height:160px;border:1px solid #ccc"></iframe>
+    <div id="log" style="margin-top:12px"></div>
+  </div>
+`
+
+const logEl = document.getElementById('log')!
+function log(msg: string) {
+  const p = document.createElement('div')
+  p.textContent = msg
+  logEl.appendChild(p)
+}
+
+;(async () => {
+  const myApi = await createIframeRpcClient<TestApi>('testApi')
+  log('client ready')
+  log('myApi.a = ' + myApi.a)
+  const r = await myApi.test(1)
+  log('myApi.test(1) -> ' + r)
+  // nested demo
+  log('myApi.nested.a = ' + myApi.nested.a)
+  const r2 = await myApi.nested.test(1)
+  log('myApi.nested.test(1) -> ' + r2)
+  // nested nested demo
+  log('myApi.nested.nested.a = ' + myApi.nested.nested.a)
+  const r3 = await myApi.nested.nested.test(1)
+  log('myApi.nested.nested.test(1) -> ' + r3)
+  // testNested demo
+  log('myApi.testNested(1).a = ' + (await myApi.testNested(1)).a)
+  const r4 = await (await myApi.testNested(1)).test(1)
+  log('myApi.testNested(1).test(1) -> ' + r4)
+
+  // mkAdder demo（函数嵌套函数）
+  const add2 = await myApi.mkAdder(2)
+  const add2r = await add2(3)
+  log('await (await myApi.mkAdder(2))(3) -> ' + add2r)
+
+  // makeObj demo（函数嵌套对象 + 对象嵌套对象/函数，多层组合）
+  const obj = await myApi.makeObj(10)
+  log('await myApi.makeObj(10).val -> ' + obj.val)
+  log('await myApi.makeObj(10).nested.val -> ' + obj.nested.val)
+  const makeObjFnR = await obj.nested.fn(5)
+  log('await (await myApi.makeObj(10)).nested.fn(5) -> ' + makeObjFnR)
+  log('await myApi.makeObj(10).nested.deeper.val -> ' + obj.nested.deeper.val)
+  const deeperFnR = await obj.nested.deeper.fn2(7)
+  log('await (await myApi.makeObj(10)).nested.deeper.fn2(7) -> ' + deeperFnR)
+  const objFn = await obj.fn(3)
+  log('await (await myApi.makeObj(10)).fn(3).val -> ' + objFn.val)
+  const deepFnR = await objFn.deepFn(4)
+  log('await (await (await myApi.makeObj(10)).fn(3)).deepFn(4) -> ' + deepFnR)
+})()

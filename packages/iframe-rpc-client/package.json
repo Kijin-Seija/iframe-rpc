@@ -1,0 +1,13 @@
+{
+  "name": "iframe-rpc-client",
+  "version": "0.0.1",
+  "private": false,
+  "type": "module",
+  "main": "dist/index.umd.cjs",
+  "module": "dist/index.js",
+  "files": ["dist"],
+  "scripts": {
+    "build": "vite build"
+  }
+}
+

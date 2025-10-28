@@ -1,0 +1,21 @@
+{
+  "name": "iframe-rpc-monorepo",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run build -w iframe-rpc-server && npm run build -w iframe-rpc-client",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.3",
+    "vite": "^7.1.7",
+    "vitest": "^2.1.4"
+  }
+}
