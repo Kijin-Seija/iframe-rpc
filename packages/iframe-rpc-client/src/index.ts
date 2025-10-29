@@ -39,10 +39,11 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
       released.add(handleId)
       // 从活跃句柄表中移除，避免后续轮询
       activeHandles.delete(handleId)
-      if (!targetWindow) return
+      const tw = targetWindow
+      if (!tw) return
       const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'RELEASE_HANDLE', handle: handleId }
       try {
-        targetWindow.postMessage(msg, '*')
+        tw.postMessage(msg, '*')
       } catch {
         // ignore release failures
       }
@@ -110,13 +111,14 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
             const fullPath = prefix ? `${prefix}.${key}` : key
             if (functionSet.has(fullPath)) {
               return (...args: any[]) => {
-                if (!targetWindow) return Promise.reject(new Error('RPC target not ready'))
+                const tw = targetWindow
+                if (!tw) return Promise.reject(new Error('RPC target not ready'))
                 const id = genId()
                 const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'CALL', id, method: fullPath, args }
                 try { console.log(`[rpc-client:${name}] CALL root method=${fullPath} id=${id}`) } catch {}
                 return new Promise((resolve, reject) => {
                   pending.set(id, { resolve, reject })
-                  targetWindow.postMessage(msg, '*')
+                  tw.postMessage(msg, '*')
                 })
               }
             }
@@ -149,13 +151,14 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
             if (functionSetLocal.has(fullPath)) {
               return (...args: any[]) => {
                 if (released.has(handleId)) return Promise.reject(new Error(`Handle ${handleId} released`))
-                if (!targetWindow) return Promise.reject(new Error('RPC target not ready'))
+                const tw = targetWindow
+                if (!tw) return Promise.reject(new Error('RPC target not ready'))
                 const id = genId()
                 const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'CALL', id, method: fullPath, args, handle: handleId }
                 try { console.log(`[rpc-client:${name}] CALL handle=${handleId} method=${fullPath} id=${id}`) } catch {}
                 return new Promise((resolve, reject) => {
                   pending.set(id, { resolve, reject })
-                  targetWindow.postMessage(msg, '*')
+                  tw.postMessage(msg, '*')
                 })
               }
             }
@@ -189,12 +192,13 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
         if (kind === 'function') {
           const fn: any = (...args: any[]) => {
             if (released.has(id)) return Promise.reject(new Error(`Handle ${id} released`))
-            if (!targetWindow) return Promise.reject(new Error('RPC target not ready'))
+            const tw = targetWindow
+            if (!tw) return Promise.reject(new Error('RPC target not ready'))
             const callId = genId()
             const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'CALL', id: callId, method: '', args, handle: id }
             return new Promise((resolve, reject) => {
               pending.set(callId, { resolve, reject })
-              targetWindow.postMessage(msg, '*')
+              tw.postMessage(msg, '*')
             })
           }
           // manual release method

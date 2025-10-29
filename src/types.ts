@@ -31,4 +31,9 @@ export interface TestApi {
       deepFn: (n: number) => number
     }
   }
+  testPromise: (param: number) => Promise<number>
+  testNestedPromise: (param: number) => Promise<{
+    val: number
+    test: (param: number) => Promise<number>
+  }>
 }

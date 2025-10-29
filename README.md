@@ -18,6 +18,8 @@
  - 初始化错误提示与超时：服务端初始广播失败会发送 `INIT_ERROR`；客户端支持握手超时（可配置），在失败或超时时明确提示
  - 返回值句柄释放：函数返回对象/函数时会创建“临时句柄”（handle）；支持显式释放与自动释放，避免句柄长期常驻
 
+- 异步返回支持：函数返回 `Promise` 时服务端会自动 `await` 并按当前逻辑处理嵌套结构（对象/函数均可），客户端类型与行为保持一致
+
 - 页面生命周期策略：客户端支持 `releaseOnPageHide: 'nonPersisted' | 'all' | 'off'`（默认 `nonPersisted`）；`beforeunload` 始终批量释放
 - 服务端闲置 TTL 清理：支持配置 `handleTtlMs` 与 `sweepIntervalMs`，对长时间未使用的句柄进行定期回收
 
@@ -65,6 +67,16 @@ console.log(await myApi.test(1)) // 2
 console.log(myApi.nested.a)    // 2
 console.log(await myApi.nested.test(1)) // 11
 
+// 函数返回 Promise 的示例
+console.log(await myApi.testPromise(1)) // 2
+// 函数返回 Promise<对象>：解构后对象内的函数可继续调用
+const asyncObj = await myApi.mkObjAsync(5)
+console.log(asyncObj.a)                    // 105
+console.log(await asyncObj.test(2))        // 7
+// 函数返回 Promise<函数>
+const add2Async = await myApi.mkAdderAsync(2)
+console.log(await add2Async(3))            // 5
+
 // 函数返回对象（对象内含函数）
 const nestedObj = await myApi.testNested(1)
 console.log(nestedObj.a) // 1001
@@ -82,6 +94,33 @@ console.log(await nestedObj.test(1)) // 1001
 ```ts
 // 默认超时 5000ms，可自定义
 const myApi = await createIframeRpcClient('testApi', { timeout: 8000 })
+```
+
+### 循环引用支持
+
+服务端与返回值中的对象如果包含循环引用（如 `obj.self === obj` 或子对象引用父对象），库会：
+- 在“值快照”中保留循环结构（避免无限递归，性能安全）
+- 收集函数路径时避免沿循环无限展开，仅记录首次遇到的最短路径
+
+示例：
+
+```ts
+// server（iframe 内）
+const cycle: any = { a: 1, nested: { val: 2 } }
+cycle.self = cycle
+cycle.nested.parent = cycle
+cycle.nested.fn = (n: number) => n + cycle.a
+createIframeRpcServer({ cycle }, { name: 'cycleDemo' })
+
+// client（外层页面）
+const api = await createIframeRpcClient('cycleDemo')
+console.log(api.cycle.a)                 // 1
+console.log(api.cycle.self.a)            // 1（循环引用）
+console.log(api.cycle.nested.parent.a)   // 1（子对象回指父对象）
+console.log(await api.cycle.nested.fn(2)) // 3（函数调用）
+
+// 注意：函数路径采用首次遇到的最短路径，例如 'cycle.nested.fn'。
+// 通过循环别名（如 'cycle.self.nested.fn'）不会重复收集，但可直接使用最短路径调用。
 ```
 
 ### 页面生命周期策略（client）
@@ -162,6 +201,7 @@ type MyApi = Promisified<TestApi> // 深度 Promise 化，嵌套函数也映射�
 // - 函数返回值 -> Promise<Promisified<返回值>>
 // - 对象属性中的函数返回 Promise<...>
 // - 如果某函数返回另一个函数，则外层返回 Promise<内层函数代理>，内层函数调用仍返回 Promise<结果>
+// - 如果函数返回 Promise<对象/函数>，服务端会解构 Promise 后按上述规则继续处理
 ```
 
 ## 本地开发与调试
@@ -204,6 +244,7 @@ type MyApi = Promisified<TestApi> // 深度 Promise 化，嵌套函数也映射�
 - `CALL`：客户端请求调用函数，包含 `id`、方法名与参数
 - `RESULT`/`ERROR`：服务端返回结果或错误，与请求 `id` 对应
   - 当结果中包含函数（或结果本身是函数）时，服务端返回一个“句柄包装”对象：`{ __rpc__: 'handle', id, kind: 'object'|'function', values, functions }`。客户端基于此创建临时代理继续调用；调用时会在消息中附带 `handle: id` 指向该返回值上下文。
+ - 当函数返回值为 `Promise<...>` 时，服务端在发送 `RESULT` 前会先异步解构（await）该 Promise，并对解构后的结果按上述规则进行处理。
  - `INIT_ERROR`：服务端初始 `READY` 广播失败时发送，包含错误消息字符串；客户端收到后直接拒绝初始化 Promise
   - `RELEASE_HANDLE`：客户端在不再需要某返回值代理时发送，服务端删除对应 `handle`。删除后再次调用会返回错误；客户端同时在本地立即拒绝对已释放句柄的调用。
 
@@ -242,6 +283,70 @@ console.log(await fn(3))       // 5
 await fn(3)                    // -> rejects
 ```
 
+## 最佳实践
+
+- 释放后重新获取句柄（重新调用原始 API 获取新句柄）
+
+```ts
+// 再次调用原始 API，生成新的句柄
+const nested1 = await myApi.testNested(1)
+;(nested1 as any).__release() // 释放旧句柄
+
+// 重新获取一个全新的句柄
+const nested2 = await myApi.testNested(1)
+console.log(await nested2.test(2)) // 正常工作
+```
+
+- 控制页面生命周期释放（client）
+
+```ts
+// 默认 releaseOnPageHide 是 'nonPersisted'；需要持久保留可改为 'off'
+const myApi = await createIframeRpcClient('testApi', {
+  releaseOnPageHide: 'off', // 不在 pagehide 释放（BFCache 与非 BFCache 都不释放）
+})
+```
+
+说明：
+- BFCache 场景下，`pagehide` 事件对象的 `ev.persisted === true`
+- 无论策略如何，`beforeunload` 始终作为兜底批量释放句柄
+
+- 延长服务端句柄寿命（server）
+
+```ts
+import { createIframeRpcServer } from 'iframe-rpc-server'
+
+createIframeRpcServer(api, {
+  name: 'testApi',
+  handleTtlMs: 10 * 60 * 1000, // 句柄闲置超时（默认 10 分钟）
+  sweepIntervalMs: 60 * 1000   // 清扫周期（默认 60 秒）
+})
+```
+
+说明：
+- 返回对象/函数时会创建句柄，并记录 lastUsed 时间戳
+- 每次基于句柄的调用都会刷新 lastUsed
+- 清扫器会定期删除超过 TTL 的句柄；此后再次调用该句柄会返回 `ERROR: Handle <id> not found`
+
+- 稳定资源的“可重取”设计（进阶）
+
+```ts
+// 示例：按用户 id 管理会话，支持重复获取同一会话对象（新句柄指向同一资源）
+const sessions = new Map<string, ReturnType<typeof createSession>>()
+
+export const api = {
+  getSession(id: string) {
+    let s = sessions.get(id)
+    if (!s) {
+      s = createSession(id) // 你的业务创建逻辑
+      sessions.set(id, s)
+    }
+    return s // 返回对象/函数，客户端得到一个新句柄，但状态来自同一 session
+  }
+}
+```
+
+注意：这属于你的业务层设计，需自行管理这些资源的生命周期，以避免内存占用过大。
+
 ## 安全与跨域
 
 - 当前实现使用 `postMessage(..., '*')`，未限制 `origin`，适合同域或受控环境
@@ -254,7 +359,8 @@ await fn(3)                    // -> rejects
 - 值快照不会自动同步：iframe 内更新 `api.a` 不会实时推送到客户端。可扩展 `UPDATE` 消息实现动态更新
 - 调用队列：当前不缓存握手前的调用。可选增强是在客户端内部添加队列，在 `READY` 后统一发送
 - 多实例支持：如需同时注册多个同名服务实例，可基于 `event.source` 或显式 iframe 引用区分
- - 值快照剔除函数：对象或数组中的函数不会出现在 `values` 快照中；当函数位于返回值中时通过“句柄包装”支持调用。目前数组元素为函数的场景未做路径收集（可后续增强）。
+ - 值快照剔除函数：对象或数组中的函数不会出现在 `values` 快照中；当函数位于返回值中时通过“句柄包装”支持调用。已支持数组元素为函数的路径收集与代理（例如 `arr.0`、`arr.1.inner`）。
+ - 循环引用：值快照会保留循环结构；函数路径收集避免沿循环无限展开，仅记录首次遇到的最短路径（建议使用该路径调用）。
 
 ## 目录结构（简要）
 

@@ -65,27 +65,42 @@ export function createIframeRpcServer<TApi extends Record<string, any>>(api: TAp
     return val !== null && typeof val === 'object'
   }
 
-  function collectFunctionPaths(obj: any, base: string[] = [], out: string[] = []) {
+  function collectFunctionPaths(obj: any, base: string[] = [], out: string[] = [], visited: WeakSet<object> = new WeakSet()) {
+    if (!isObject(obj)) return out
+    // 避免循环引用导致的无限递归
+    if (visited.has(obj)) return out
+    visited.add(obj as object)
     for (const key of Object.keys(obj)) {
-      const v = obj[key]
+      const v = (obj as any)[key]
       const path = [...base, key]
       if (typeof v === 'function') out.push(path.join('.'))
-      else if (isObject(v)) collectFunctionPaths(v, path, out)
+      else if (isObject(v)) collectFunctionPaths(v, path, out, visited)
     }
     return out
   }
 
-  function cloneValuesOnly(obj: any): any {
+  function cloneValuesOnly(obj: any, seen: WeakMap<object, any> = new WeakMap()): any {
     if (typeof obj === 'function') return undefined
     if (!isObject(obj)) return obj
-    if (Array.isArray(obj)) return obj.map((item) => cloneValuesOnly(item))
-    const out: Record<string, any> = {}
-    for (const key of Object.keys(obj)) {
-      const v = obj[key]
-      if (typeof v === 'function') continue
-      out[key] = cloneValuesOnly(v)
+    // 处理循环引用：复用已克隆对象
+    const existing = seen.get(obj as object)
+    if (existing) return existing
+    if (Array.isArray(obj)) {
+      const outArr: any[] = []
+      seen.set(obj as object, outArr)
+      for (let i = 0; i < obj.length; i++) {
+        outArr[i] = cloneValuesOnly(obj[i], seen)
+      }
+      return outArr
     }
-    return out
+    const outObj: Record<string, any> = {}
+    seen.set(obj as object, outObj)
+    for (const key of Object.keys(obj)) {
+      const v = (obj as any)[key]
+      if (typeof v === 'function') continue
+      outObj[key] = cloneValuesOnly(v, seen)
+    }
+    return outObj
   }
 
   const values: Record<string, any> = cloneValuesOnly(api)

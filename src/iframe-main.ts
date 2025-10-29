@@ -67,7 +67,21 @@ const api: TestApi = {
         }
       },
     }
-  }
+  },
+  testPromise: (param: number) => {
+    console.log('hi, im testPromise api')
+    return Promise.resolve(param + 1)
+  },
+  testNestedPromise: (param: number) => {
+    console.log('hi, im testNestedPromise api')
+    return Promise.resolve({
+      val: param + 10000,
+      test: (param: number) => {
+        console.log('hi, im testNestedPromise test api')
+        return Promise.resolve(param + 10000)
+      },
+    })
+  },
 }
 
 createIframeRpcServer(api, { name: 'testApi' })

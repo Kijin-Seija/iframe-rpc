@@ -10,7 +10,7 @@
     "dev": "vite",
     "build": "npm run build -w iframe-rpc-server && npm run build -w iframe-rpc-client",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "tsc -p tsconfig.json && vitest run",
     "test:watch": "vitest"
   },
   "devDependencies": {

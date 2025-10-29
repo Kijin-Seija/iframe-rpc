@@ -54,4 +54,12 @@ function log(msg: string) {
   log('await (await myApi.makeObj(10)).fn(3).val -> ' + objFn.val)
   const deepFnR = await objFn.deepFn(4)
   log('await (await (await myApi.makeObj(10)).fn(3)).deepFn(4) -> ' + deepFnR)
+  // testPromise demo
+  const promiseR = await myApi.testPromise(1000)
+  log('await myApi.testPromise(1000) -> ' + promiseR)
+  // testNestedPromise demo
+  const nestedPromiseR = await myApi.testNestedPromise(10000)
+  log('await myApi.testNestedPromise(10000).val -> ' + nestedPromiseR.val)
+  const nestedPromiseTestR = await nestedPromiseR.test(20000)
+  log('await (await myApi.testNestedPromise(10000)).test(20000) -> ' + nestedPromiseTestR)
 })()

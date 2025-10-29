@@ -236,6 +236,73 @@ describe('iframe-rpc 集成测试', () => {
     }
   })
 
+  it('支持函数返回 Promise<number>', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<{ testPromise: (n: number) => Promise<number> }>('promise-prim')
+
+      ;(globalThis as any).window = child as any
+      const api = { testPromise: (n: number) => Promise.resolve(n + 1) }
+      createIframeRpcServer(api as any, { name: 'promise-prim' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      const r = await client.testPromise(1)
+      expect(r).toBe(2)
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('支持函数返回 Promise<对象含函数> 并可继续调用', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<{ mkObjAsync: (seed: number) => Promise<{ a: number; test: (n: number) => number }> }>('promise-obj')
+
+      ;(globalThis as any).window = child as any
+      const api = {
+        mkObjAsync: async (seed: number) => ({ a: seed + 100, test: (n: number) => n + seed })
+      }
+      createIframeRpcServer(api as any, { name: 'promise-obj' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      const obj = await client.mkObjAsync(5)
+      expect(obj.a).toBe(105)
+      const r = await obj.test(2)
+      expect(r).toBe(7)
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('支持函数返回 Promise<函数> 并可继续调用', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<{ mkAdderAsync: (x: number) => Promise<(y: number) => number> }>('promise-fn')
+
+      ;(globalThis as any).window = child as any
+      const api = {
+        mkAdderAsync: async (x: number) => (y: number) => x + y
+      }
+      createIframeRpcServer(api as any, { name: 'promise-fn' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      const add2 = await client.mkAdderAsync(2)
+      const r = await add2(3)
+      expect(r).toBe(5)
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
   it('函数返回函数可以继续调用', async () => {
     const { parent, child } = createPair()
     const original = globalThis.window
@@ -513,6 +580,124 @@ describe('iframe-rpc 集成测试', () => {
 
       // 过期后再次调用应报错（服务端返回 Handle not found）
       await expect(obj.test(1)).rejects.toThrow('Handle')
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('支持根级数组内的函数调用与嵌套', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<{ arr: any[] }>('array-root')
+
+      ;(globalThis as any).window = child as any
+      const api = {
+        arr: [
+          (n: number) => n + 1,
+          (n: number) => n + 10,
+          { inner: (n: number) => n + 100 },
+        ],
+      }
+      createIframeRpcServer(api as any, { name: 'array-root' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      const r0 = await (client.arr as any)[0](1)
+      expect(r0).toBe(2)
+      const r1 = await (client.arr as any)[1](1)
+      expect(r1).toBe(11)
+      const r2 = await (client.arr as any)[2].inner(1)
+      expect(r2).toBe(101)
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('支持返回值为数组且数组内含函数的继续调用', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<{ mkArr: (seed: number) => any[] }>('array-return')
+
+      ;(globalThis as any).window = child as any
+      const api = {
+        mkArr: async (seed: number) => [
+          (n: number) => n + seed,
+          { inner: (n: number) => n + seed * 10 },
+        ],
+      }
+      createIframeRpcServer(api as any, { name: 'array-return' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      const arr = await client.mkArr(2)
+      const r0 = await arr[0](3)
+      expect(r0).toBe(5)
+      const r1 = await arr[1].inner(1)
+      expect(r1).toBe(21)
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('支持 API 中循环引用（值与函数）', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<{ cycle: any }>('cycle-root')
+
+      ;(globalThis as any).window = child as any
+      const cycle: any = { a: 1, nested: { val: 2 } }
+      cycle.self = cycle
+      cycle.nested.parent = cycle
+      cycle.nested.fn = (n: number) => n + cycle.a
+      const api = { cycle }
+      createIframeRpcServer(api as any, { name: 'cycle-root' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      expect(client.cycle.a).toBe(1)
+      expect(client.cycle.self.a).toBe(1)
+      expect(client.cycle.nested.parent.a).toBe(1)
+      const r = await client.cycle.nested.fn(2)
+      expect(r).toBe(3)
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('支持函数返回对象包含循环引用', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<{ mkCyclic: (seed: number) => any }>('cycle-return')
+
+      ;(globalThis as any).window = child as any
+      const api = {
+        mkCyclic: (seed: number) => {
+          const o: any = { a: seed }
+          o.self = o
+          o.nested = { val: seed + 1 }
+          o.nested.parent = o
+          o.nested.fn = (n: number) => n + o.a
+          return o
+        },
+      }
+      createIframeRpcServer(api as any, { name: 'cycle-return' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      const obj = await client.mkCyclic(10)
+      expect(obj.a).toBe(10)
+      expect(obj.self.a).toBe(10)
+      expect(obj.nested.parent.a).toBe(10)
+      const r = await obj.nested.fn(5)
+      expect(r).toBe(15)
     } finally {
       ;(globalThis as any).window = original
     }
