@@ -7,6 +7,12 @@ const api: TestApi = {
     console.log('hi, im test api')
     return param + 1
   },
+  // 内置对象按值直传（根值）
+  dateNow: new Date('2021-01-01T00:00:00Z'),
+  reg: /hello/i,
+  mapVal: new Map<string, number>([['a', 10], ['b', 20]]),
+  setVal: new Set<number>([1, 2, 3]),
+  taVal: new Uint8Array([7, 8, 9]),
   nested: {
     a: 2,
     test: (param: number) => {
@@ -66,6 +72,19 @@ const api: TestApi = {
           },
         }
       },
+    }
+  },
+  // 返回对象中包含内置对象 + 函数
+  mkMixed: (seed: number) => {
+    console.log('hi, im mkMixed')
+    return {
+      val: seed,
+      date: new Date('2022-02-02T02:02:02Z'),
+      reg: /mixed/i,
+      map: new Map<string, number>([['seed', seed]]),
+      set: new Set<number>([seed, seed + 1]),
+      ta: new Uint8Array([seed, seed + 1, seed + 2]),
+      test: (n: number) => n + seed,
     }
   },
   testPromise: (param: number) => {

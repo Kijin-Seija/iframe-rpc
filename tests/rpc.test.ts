@@ -303,6 +303,96 @@ describe('iframe-rpc 集成测试', () => {
     }
   })
 
+  it('按值直传：根值中的内置对象（Date/RegExp/Map/Set/TypedArray）', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<{
+        d: Date
+        r: RegExp
+        m: Map<string, number>
+        s: Set<number>
+        ta: Uint8Array
+      }>('builtins-root')
+
+      ;(globalThis as any).window = child as any
+      const api = {
+        d: new Date('2020-01-01T00:00:00Z'),
+        r: /abc/i,
+        m: new Map<string, number>([['x', 42]]),
+        s: new Set<number>([1, 2, 3]),
+        ta: new Uint8Array([1, 2, 3]),
+      }
+      createIframeRpcServer(api as any, { name: 'builtins-root' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      expect(client.d instanceof Date).toBe(true)
+      expect(client.d.getUTCFullYear()).toBe(2020)
+      expect(client.r.test('ABC')).toBe(true)
+      expect(client.m instanceof Map).toBe(true)
+      expect(client.m.get('x')).toBe(42)
+      expect(client.s instanceof Set).toBe(true)
+      expect(client.s.has(2)).toBe(true)
+      expect(client.ta instanceof Uint8Array).toBe(true)
+      expect(client.ta[0]).toBe(1)
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('按值直传：返回对象中的内置对象（Date/Map/Set/TypedArray）保留原生行为', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<{
+        mkMixed: (seed: number) => {
+          val: number
+          date: Date
+          reg: RegExp
+          map: Map<string, number>
+          set: Set<number>
+          ta: Uint8Array
+          test: (n: number) => number
+        }
+      }>('builtins-nested')
+
+      ;(globalThis as any).window = child as any
+      const api = {
+        mkMixed: (seed: number) => ({
+          val: seed,
+          date: new Date('2022-02-02T02:02:02Z'),
+          reg: /def/i,
+          map: new Map<string, number>([['y', seed * 10]]),
+          set: new Set<number>([seed, seed + 1]),
+          ta: new Uint8Array([seed, seed + 1]),
+          test: (n: number) => n + seed,
+        }),
+      }
+      createIframeRpcServer(api as any, { name: 'builtins-nested' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      const obj = await client.mkMixed(5)
+      expect(obj.val).toBe(5)
+      expect(obj.date instanceof Date).toBe(true)
+      expect(obj.date.getUTCFullYear()).toBe(2022)
+      expect(obj.reg.test('DEF')).toBe(true)
+      expect(obj.map instanceof Map).toBe(true)
+      expect(obj.map.get('y')).toBe(50)
+      expect(obj.set instanceof Set).toBe(true)
+      expect(obj.set.has(6)).toBe(true)
+      expect(obj.ta instanceof Uint8Array).toBe(true)
+      expect(obj.ta[0]).toBe(5)
+      const r = await obj.test(2)
+      expect(r).toBe(7)
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
   it('函数返回函数可以继续调用', async () => {
     const { parent, child } = createPair()
     const original = globalThis.window

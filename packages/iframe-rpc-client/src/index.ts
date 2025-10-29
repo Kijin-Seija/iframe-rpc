@@ -94,6 +94,21 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
       return cur
     }
 
+    function brandTag(val: any): string {
+      return Object.prototype.toString.call(val)
+    }
+    function isTypedArray(val: any): boolean {
+      return typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView && ArrayBuffer.isView(val)
+    }
+    function isStructuredClonePassThrough(val: any): boolean {
+      if (!val || typeof val !== 'object') return false
+      const tag = brandTag(val)
+      if (tag === '[object Date]' || tag === '[object RegExp]' || tag === '[object ArrayBuffer]' || tag === '[object DataView]' || tag === '[object Blob]' || tag === '[object File]' || tag === '[object ImageData]') return true
+      if (tag === '[object Map]' || tag === '[object Set]') return true
+      if (isTypedArray(val)) return true
+      return false
+    }
+
     function hasFunctionUnder(prefix: string) {
       const pre = prefix ? prefix + '.' : ''
       for (const f of functionSet) {
@@ -123,10 +138,13 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
               }
             }
             const v = getDeep(values, fullPath)
-            if (v !== undefined && v !== null && typeof v === 'object') {
-              return createLevelProxy(fullPath)
+            if (v !== undefined) {
+              if (v !== null && typeof v === 'object') {
+                if (isStructuredClonePassThrough(v)) return v
+                return createLevelProxy(fullPath)
+              }
+              return v
             }
-            if (v !== undefined) return v
             // Even if value not present, still expose nested proxy if there are functions under this path
             if (hasFunctionUnder(fullPath)) return createLevelProxy(fullPath)
             return undefined
@@ -163,10 +181,13 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
               }
             }
             const v = getDeep(scopedValues, fullPath)
-            if (v !== undefined && v !== null && typeof v === 'object') {
-              return createScopedProxy(handleId, scopedValues, scopedFunctions, fullPath)
+            if (v !== undefined) {
+              if (v !== null && typeof v === 'object') {
+                if (isStructuredClonePassThrough(v)) return v
+                return createScopedProxy(handleId, scopedValues, scopedFunctions, fullPath)
+              }
+              return v
             }
-            if (v !== undefined) return v
             const pre = prefix ? prefix + '.' : ''
             if ([...functionSetLocal].some((f) => f === fullPath || f.startsWith(pre + key + '.'))) {
               return createScopedProxy(handleId, scopedValues, scopedFunctions, fullPath)

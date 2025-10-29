@@ -36,4 +36,20 @@ export interface TestApi {
     val: number
     test: (param: number) => Promise<number>
   }>
+  // 内置对象按值直传演示（根值）
+  dateNow: Date
+  reg: RegExp
+  mapVal: Map<string, number>
+  setVal: Set<number>
+  taVal: Uint8Array
+  // 返回对象中包含内置对象 + 函数
+  mkMixed: (seed: number) => {
+    val: number
+    date: Date
+    reg: RegExp
+    map: Map<string, number>
+    set: Set<number>
+    ta: Uint8Array
+    test: (n: number) => number
+  }
 }

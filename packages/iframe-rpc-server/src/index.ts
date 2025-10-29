@@ -65,6 +65,25 @@ export function createIframeRpcServer<TApi extends Record<string, any>>(api: TAp
     return val !== null && typeof val === 'object'
   }
 
+  function brandTag(val: any): string {
+    return Object.prototype.toString.call(val)
+  }
+
+  function isTypedArray(val: any): boolean {
+    return typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView && ArrayBuffer.isView(val)
+  }
+
+  function isStructuredClonePassThrough(val: any): boolean {
+    const tag = brandTag(val)
+    // Broadly supported structured-clone types
+    if (tag === '[object Date]' || tag === '[object RegExp]' || tag === '[object ArrayBuffer]' || tag === '[object DataView]' || tag === '[object Blob]' || tag === '[object File]' || tag === '[object ImageData]') {
+      return true
+    }
+    if (tag === '[object Map]' || tag === '[object Set]') return true
+    if (isTypedArray(val)) return true
+    return false
+  }
+
   function collectFunctionPaths(obj: any, base: string[] = [], out: string[] = [], visited: WeakSet<object> = new WeakSet()) {
     if (!isObject(obj)) return out
     // 避免循环引用导致的无限递归
@@ -82,6 +101,35 @@ export function createIframeRpcServer<TApi extends Record<string, any>>(api: TAp
   function cloneValuesOnly(obj: any, seen: WeakMap<object, any> = new WeakMap()): any {
     if (typeof obj === 'function') return undefined
     if (!isObject(obj)) return obj
+    // Structured-clone builtins: preserve brand, sanitize entries where applicable
+    if (isStructuredClonePassThrough(obj)) {
+      const tag = brandTag(obj)
+      // 处理循环引用：复用已克隆对象/占位
+      const existing = seen.get(obj as object)
+      if (existing) return existing
+      if (tag === '[object Map]') {
+        const outMap = new Map<any, any>()
+        seen.set(obj as object, outMap)
+        ;(obj as Map<any, any>).forEach((v, k) => {
+          const ck = cloneValuesOnly(k, seen)
+          const cv = cloneValuesOnly(v, seen)
+          outMap.set(ck, cv)
+        })
+        return outMap
+      }
+      if (tag === '[object Set]') {
+        const outSet = new Set<any>()
+        seen.set(obj as object, outSet)
+        ;(obj as Set<any>).forEach((v) => {
+          const cv = cloneValuesOnly(v, seen)
+          outSet.add(cv)
+        })
+        return outSet
+      }
+      // TypedArray / ArrayBuffer / DataView / Date / RegExp / Blob / File / ImageData: pass-through
+      seen.set(obj as object, obj)
+      return obj
+    }
     // 处理循环引用：复用已克隆对象
     const existing = seen.get(obj as object)
     if (existing) return existing

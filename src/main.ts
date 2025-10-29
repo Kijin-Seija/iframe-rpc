@@ -62,4 +62,23 @@ function log(msg: string) {
   log('await myApi.testNestedPromise(10000).val -> ' + nestedPromiseR.val)
   const nestedPromiseTestR = await nestedPromiseR.test(20000)
   log('await (await myApi.testNestedPromise(10000)).test(20000) -> ' + nestedPromiseTestR)
+
+  // Builtins (根值) 演示
+  log('myApi.dateNow instanceof Date -> ' + (myApi.dateNow instanceof Date))
+  log('myApi.dateNow.getUTCFullYear() -> ' + myApi.dateNow.getUTCFullYear())
+  log('myApi.reg.test("HELLO") -> ' + myApi.reg.test('HELLO'))
+  log('myApi.mapVal.get("a") -> ' + myApi.mapVal.get('a'))
+  log('myApi.setVal.has(2) -> ' + myApi.setVal.has(2))
+  log('myApi.taVal[0] -> ' + myApi.taVal[0])
+
+  // Builtins（返回对象中）演示
+  const mixed = await myApi.mkMixed(5)
+  log('await myApi.mkMixed(5).val -> ' + mixed.val)
+  log('await myApi.mkMixed(5).date.getUTCFullYear() -> ' + mixed.date.getUTCFullYear())
+  log('await myApi.mkMixed(5).reg.test("MIXED") -> ' + mixed.reg.test('MIXED'))
+  log('await myApi.mkMixed(5).map.get("seed") -> ' + mixed.map.get('seed'))
+  log('await myApi.mkMixed(5).set.has(6) -> ' + mixed.set.has(6))
+  log('await myApi.mkMixed(5).ta[0] -> ' + mixed.ta[0])
+  const mixedR = await mixed.test(2)
+  log('await (await myApi.mkMixed(5)).test(2) -> ' + mixedR)
 })()
