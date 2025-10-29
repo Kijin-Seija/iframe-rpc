@@ -118,9 +118,10 @@ console.log(api.cycle.a)                 // 1
 console.log(api.cycle.self.a)            // 1（循环引用）
 console.log(api.cycle.nested.parent.a)   // 1（子对象回指父对象）
 console.log(await api.cycle.nested.fn(2)) // 3（函数调用）
+console.log(await api.cycle.self.nested.fn(2)) // 3（循环别名路径调用，自动映射到最短路径）
 
 // 注意：函数路径采用首次遇到的最短路径，例如 'cycle.nested.fn'。
-// 通过循环别名（如 'cycle.self.nested.fn'）不会重复收集，但可直接使用最短路径调用。
+// 客户端支持循环别名调用：通过别名（如 'cycle.self.nested.fn'）将自动映射到最短路径并成功调用。
 ```
 
 ### 页面生命周期策略（client）
@@ -361,7 +362,7 @@ export const api = {
 - 多实例支持：如需同时注册多个同名服务实例，可基于 `event.source` 或显式 iframe 引用区分
  - 值快照剔除函数：对象或数组中的函数不会出现在 `values` 快照中；当函数位于返回值中时通过“句柄包装”支持调用。已支持数组元素为函数的路径收集与代理（例如 `arr.0`、`arr.1.inner`）。
  - Map/Set 支持说明：仅支持“基本类型值”（如 `string`、`number`、`boolean`、`null`、`undefined`）作为条目值；条目中的函数会被剔除且不支持调用。Map/Set 条目中的函数不会被路径收集，如需调用函数请将函数作为对象属性或返回值中的函数暴露，由句柄代理继续调用。
- - 循环引用：值快照会保留循环结构；函数路径收集避免沿循环无限展开，仅记录首次遇到的最短路径（建议使用该路径调用）。
+ - 循环引用：值快照保留循环结构；函数路径收集采用首次遇到的最短路径。客户端对循环别名提供调用支持：别名路径自动映射到最短路径，不会出现 `undefined`。
 
 ## 目录结构（简要）
 
@@ -380,6 +381,3 @@ export const api = {
 ├─ iframe.html            # iframe 页面
 ```
 
----
-
-如需：类型声明打包、`origin` 安全校验、调用队列或动态快照更新等增强功能，可在后续版本中加入。我可以根据你的需求继续完善。

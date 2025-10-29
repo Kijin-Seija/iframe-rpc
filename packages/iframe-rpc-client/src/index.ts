@@ -58,6 +58,8 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
   return new Promise((resolve, reject) => {
     let targetWindow: Window | null = null
     let values: Record<string, any> = {}
+    // 记录值快照中每个对象的“首遇最短路径”，用于循环别名路径的函数解析
+    let canonicalIndex: WeakMap<object, string> = new WeakMap()
     const functionSet = new Set<string>()
     const pending = new Map<string, { resolve: (v: any) => void; reject: (e: any) => void }>()
     const released = new Set<string>()
@@ -141,6 +143,47 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
       return false
     }
 
+    // 为循环引用构建对象到最短路径的索引（仅遍历普通对象/数组）
+    function buildCanonicalIndex(root: any): WeakMap<object, string> {
+      const idx = new WeakMap<object, string>()
+      const visited = new WeakSet<object>()
+      function walk(obj: any, path: string) {
+        if (!obj || typeof obj !== 'object') return
+        // 内置结构化直传对象按值存在，不遍历其内部
+        if (isStructuredClonePassThrough(obj)) {
+          if (!idx.has(obj as object)) idx.set(obj as object, path)
+          return
+        }
+        if (visited.has(obj as object)) return
+        visited.add(obj as object)
+        if (!idx.has(obj as object)) idx.set(obj as object, path)
+        if (Array.isArray(obj)) {
+          for (let i = 0; i < obj.length; i++) {
+            walk(obj[i], path ? `${path}.${i}` : String(i))
+          }
+        } else {
+          for (const key of Object.keys(obj)) {
+            walk(obj[key], path ? `${path}.${key}` : key)
+          }
+        }
+      }
+      walk(root, '')
+      return idx
+    }
+
+    function resolveAliasFunctionPath(parentPath: string, key: string): string | null {
+      // 精确路径存在则直接使用
+      const direct = parentPath ? `${parentPath}.${key}` : key
+      if (functionSet.has(direct)) return direct
+      // 尝试通过循环别名映射到“首遇最短路径”
+      const parentObj = getDeep(values, parentPath)
+      if (!parentObj || typeof parentObj !== 'object') return null
+      const canon = canonicalIndex.get(parentObj as object)
+      if (!canon && canon !== '') return null
+      const candidate = canon ? `${canon}.${key}` : key
+      return functionSet.has(candidate) ? candidate : null
+    }
+
     function hasFunctionUnder(prefix: string) {
       const pre = prefix ? prefix + '.' : ''
       for (const f of functionSet) {
@@ -156,13 +199,15 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
           get(_target, prop) {
             const key = String(prop)
             const fullPath = prefix ? `${prefix}.${key}` : key
-            if (functionSet.has(fullPath)) {
+            // 支持循环别名：在 functionSet 中未出现的别名路径，尝试映射到最短路径
+            const resolvedFnPath = resolveAliasFunctionPath(prefix, key)
+            if (resolvedFnPath) {
               return (...args: any[]) => {
                 const tw = targetWindow
                 if (!tw) return Promise.reject(new Error('RPC target not ready'))
                 const id = genId()
-                const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'CALL', id, method: fullPath, args }
-                try { console.log(`[rpc-client:${name}] CALL root method=${fullPath} id=${id}`) } catch {}
+                const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'CALL', id, method: resolvedFnPath, args }
+                try { console.log(`[rpc-client:${name}] CALL root method=${resolvedFnPath} id=${id}`) } catch {}
                 return new Promise((resolve, reject) => {
                   pending.set(id, { resolve, reject })
                   tw.postMessage(msg, '*')
@@ -178,7 +223,14 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
               return v
             }
             // Even if value not present, still expose nested proxy if there are functions under this path
+            // 别名路径的函数存在于其“最短路径”下时也暴露嵌套代理
             if (hasFunctionUnder(fullPath)) return createLevelProxy(fullPath)
+            const parentObj = getDeep(values, prefix)
+            if (parentObj && typeof parentObj === 'object') {
+              const canon = canonicalIndex.get(parentObj as object)
+              const aliasPrefix = canon ? `${canon}.${key}` : key
+              if (hasFunctionUnder(aliasPrefix)) return createLevelProxy(fullPath)
+            }
             return undefined
           },
         }
@@ -188,6 +240,7 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
 
     function createScopedProxy(handleId: string, scopedValues: Record<string, any>, scopedFunctions: string[], prefix: string): any {
       const functionSetLocal = new Set<string>(scopedFunctions)
+      const canonicalIndexLocal = buildCanonicalIndex(scopedValues)
       const target: Record<string, any> = {}
       const proxy = new Proxy(
         target,
@@ -198,14 +251,26 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
             if (key === '__release') {
               return () => releaseHandle(handleId)
             }
-            if (functionSetLocal.has(fullPath)) {
+            // 支持循环别名：在本地 functionSetLocal 未出现的别名路径，尝试映射到最短路径
+            const resolveLocal = () => {
+              const direct = fullPath
+              if (functionSetLocal.has(direct)) return direct
+              const parentObj = getDeep(scopedValues, prefix)
+              if (!parentObj || typeof parentObj !== 'object') return null
+              const canon = canonicalIndexLocal.get(parentObj as object)
+              if (!canon && canon !== '') return null
+              const candidate = canon ? `${canon}.${key}` : key
+              return functionSetLocal.has(candidate) ? candidate : null
+            }
+            const resolvedFnPath = resolveLocal()
+            if (resolvedFnPath) {
               return (...args: any[]) => {
                 if (released.has(handleId)) return Promise.reject(new Error(`Handle ${handleId} released`))
                 const tw = targetWindow
                 if (!tw) return Promise.reject(new Error('RPC target not ready'))
                 const id = genId()
-                const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'CALL', id, method: fullPath, args, handle: handleId }
-                try { console.log(`[rpc-client:${name}] CALL handle=${handleId} method=${fullPath} id=${id}`) } catch {}
+                const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'CALL', id, method: resolvedFnPath, args, handle: handleId }
+                try { console.log(`[rpc-client:${name}] CALL handle=${handleId} method=${resolvedFnPath} id=${id}`) } catch {}
                 return new Promise((resolve, reject) => {
                   pending.set(id, { resolve, reject })
                   tw.postMessage(msg, '*')
@@ -221,8 +286,18 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
               return v
             }
             const pre = prefix ? prefix + '.' : ''
+            // 针对别名路径，检查其“最短路径”下是否仍有函数存在
             if ([...functionSetLocal].some((f) => f === fullPath || f.startsWith(pre + key + '.'))) {
               return createScopedProxy(handleId, scopedValues, scopedFunctions, fullPath)
+            }
+            const parentObj = getDeep(scopedValues, prefix)
+            if (parentObj && typeof parentObj === 'object') {
+              const canon = canonicalIndexLocal.get(parentObj as object)
+              const aliasPrefix = canon ? `${canon}.${key}` : key
+              const preAlias = aliasPrefix ? aliasPrefix + '.' : ''
+              if ([...functionSetLocal].some((f) => f === aliasPrefix || f.startsWith(preAlias))) {
+                return createScopedProxy(handleId, scopedValues, scopedFunctions, fullPath)
+              }
             }
             return undefined
           },
@@ -278,6 +353,7 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
         clearTimeout(initTimer)
         targetWindow = event.source as Window | null
         values = data.payload.values || {}
+        canonicalIndex = buildCanonicalIndex(values)
         functionSet.clear()
         for (const fnName of data.payload.functions || []) functionSet.add(fnName)
         resolve(createLevelProxy('') as Promisified<TApi>)
