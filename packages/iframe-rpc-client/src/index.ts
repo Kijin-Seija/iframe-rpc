@@ -16,11 +16,43 @@ function genId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
-export type Promisified<T> = T extends (...args: infer A) => infer R
-  ? (...args: A) => Promise<Promisified<Awaited<R>>>
-  : T extends Record<string, any>
-    ? { [K in keyof T]: Promisified<T[K]> }
-    : T
+// 与运行时 isStructuredClonePassThrough 对齐的“结构化可直传”类型集合
+type StructuredCloneValue =
+  | Date
+  | RegExp
+  | ArrayBuffer
+  | DataView
+  | Blob
+  | File
+  | ImageData
+  | Map<any, any>
+  | Set<any>
+  | Int8Array
+  | Uint8Array
+  | Uint8ClampedArray
+  | Int16Array
+  | Uint16Array
+  | Int32Array
+  | Uint32Array
+  | Float32Array
+  | Float64Array
+  | BigInt64Array
+  | BigUint64Array
+
+export type Promisified<T> =
+  // 对可结构化直传的对象，保持原样（不递归 Promise 化）
+  T extends StructuredCloneValue
+    ? T
+    : T extends (...args: infer A) => infer R
+      // 函数始终返回 Promise（与异步调用一致），但内部返回值做递归处理
+      ? (...args: A) => Promise<Promisified<Awaited<R>>>
+      // 普通数组做元素级递归
+      : T extends ReadonlyArray<any>
+        ? { [K in keyof T]: Promisified<T[K]> }
+        // 普通对象做属性级递归
+        : T extends Record<string, any>
+          ? { [K in keyof T]: Promisified<T[K]> }
+          : T
 
 export function createIframeRpcClient<TApi extends Record<string, any>>(name: string, options?: { timeout?: number; gcSweepIntervalMs?: number; releaseOnPageHide?: 'nonPersisted' | 'all' | 'off' }): Promise<Promisified<TApi>> {
   return new Promise((resolve, reject) => {

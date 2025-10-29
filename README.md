@@ -29,7 +29,7 @@
 
 - `npm install iframe-rpc-client iframe-rpc-server`
 
-本仓库本地开发示例直接从源码引入（见 `src/main.ts` 与 `src/iframe-main.ts`），用于快速调试。
+本仓库本地开发示例直接从源码引入（见 `demo/main.ts` 与 `demo/iframe-main.ts`），用于快速调试。
 
 ## 快速开始
 
@@ -211,8 +211,8 @@ type MyApi = Promisified<TestApi> // 深度 Promise 化，嵌套函数也映射�
 - iframe 页面预览：`http://localhost:5173/iframe.html`
 
 开发示例：
-- 外层页面（`src/main.ts`）会创建一个 `iframe` 指向 `iframe.html`，并在握手完成后演示对 `api` 的读取与函数调用
-- iframe 页面（`iframe.html`）加载 `src/iframe-main.ts`，注册名为 `testApi` 的服务
+- 外层页面（`demo/main.ts`）会创建一个 `iframe` 指向 `iframe.html`，并在握手完成后演示对 `api` 的读取与函数调用
+- iframe 页面（`iframe.html`）加载 `demo/iframe-main.ts`，注册名为 `testApi` 的服务
 
 ## 构建与发布
 
@@ -370,7 +370,7 @@ export const api = {
 ├─ packages/
 │  ├─ iframe-rpc-server/  # 服务端包
 │  └─ iframe-rpc-client/  # 客户端包
-├─ src/                   # 本地调试源码
+├─ demo/                  # 本地调试源码（原 src）
 │  ├─ main.ts             # 外层页面入口
 │  ├─ iframe-main.ts      # iframe 页面入口（服务端）
 │  └─ types.ts            # 测试类型示例
