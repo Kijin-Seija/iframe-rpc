@@ -54,9 +54,10 @@ export type Promisified<T> =
           ? { [K in keyof T]: Promisified<T[K]> }
           : T
 
-export function createIframeRpcClient<TApi extends Record<string, any>>(name: string, options?: { timeout?: number; gcSweepIntervalMs?: number; releaseOnPageHide?: 'nonPersisted' | 'all' | 'off'; hideStructure?: boolean }): Promise<Promisified<TApi>> {
+export function createIframeRpcClient<TApi extends Record<string, any>>(name: string, options?: { timeout?: number; gcSweepIntervalMs?: number; releaseOnPageHide?: 'nonPersisted' | 'all' | 'off'; hideStructure?: boolean; allowedOrigins?: string[] | ((origin: string) => boolean); targetOrigin?: string }): Promise<Promisified<TApi>> {
   return new Promise((resolve, reject) => {
     let targetWindow: Window | null = null
+    let serverOrigin: string | null = null
     let values: Record<string, any> = {}
     // 记录值快照中每个对象的“首遇最短路径”，用于循环别名路径的函数解析
     let canonicalIndex: WeakMap<object, string> = new WeakMap()
@@ -69,6 +70,19 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
       reject(new Error(`iframe-rpc initialization timeout for name: ${name}`))
     }, timeoutMs)
 
+    const destinationOrigin = () => {
+      if (options?.targetOrigin) return options.targetOrigin
+      if (serverOrigin) return serverOrigin
+      return '*'
+    }
+
+    const isOriginAllowed = (() => {
+      if (!options?.allowedOrigins) return (_origin: string) => true
+      if (typeof options.allowedOrigins === 'function') return options.allowedOrigins
+      const set = new Set(options.allowedOrigins)
+      return (origin: string) => set.has(origin)
+    })()
+
     const releaseHandle = (handleId: string) => {
       released.add(handleId)
       // 从活跃句柄表中移除，避免后续轮询
@@ -77,7 +91,7 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
       if (!tw) return
       const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'RELEASE_HANDLE', handle: handleId }
       try {
-        tw.postMessage(msg, '*')
+        tw.postMessage(msg, destinationOrigin())
       } catch {
         // ignore release failures
       }
@@ -206,7 +220,7 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
         try { console.log(`[rpc-client:${name}] CALL root method=${method} id=${id}`) } catch {}
         return new Promise((resolve, reject) => {
           pending.set(id, { resolve, reject })
-          tw.postMessage(msg, '*')
+          tw.postMessage(msg, destinationOrigin())
         })
       }
     }
@@ -332,7 +346,7 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
           try { console.log(`[rpc-client:${name}] CALL handle=${handleId} method=${method} id=${id}`) } catch {}
           return new Promise((resolve, reject) => {
             pending.set(id, { resolve, reject })
-            tw.postMessage(msg, '*')
+            tw.postMessage(msg, destinationOrigin())
           })
         }
       }
@@ -497,11 +511,11 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
             if (!tw) return Promise.reject(new Error('RPC target not ready'))
             const callId = genId()
             const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'CALL', id: callId, method: '', args, handle: id }
-            return new Promise((resolve, reject) => {
-              pending.set(callId, { resolve, reject })
-              tw.postMessage(msg, '*')
-            })
-          }
+              return new Promise((resolve, reject) => {
+                pending.set(callId, { resolve, reject })
+                tw.postMessage(msg, destinationOrigin())
+              })
+            }
           // manual release method
           fn.__release = () => releaseHandle(id)
           // auto release on GC if supported
@@ -522,12 +536,15 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
     }
 
     const handler = (event: MessageEvent) => {
+      // 校验来源 origin（若配置了 allowedOrigins）
+      if (!isOriginAllowed(event.origin)) return
       const data: RpcMessage | any = event.data
       if (!data || data.rpc !== 'iframe-rpc' || data.name !== name) return
 
       if (data.type === 'READY') {
         clearTimeout(initTimer)
         targetWindow = event.source as Window | null
+        serverOrigin = event.origin || null
         values = data.payload.values || {}
         canonicalIndex = buildCanonicalIndex(values)
         functionSet.clear()

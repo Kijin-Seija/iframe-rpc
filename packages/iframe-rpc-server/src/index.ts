@@ -4,6 +4,12 @@ export type CreateIframeRpcServerOptions = {
   handleTtlMs?: number
   // How often to run the sweeping task that evicts expired handles. Defaults to 60 seconds.
   sweepIntervalMs?: number
+  // Restrict which origins are allowed to send messages to this server.
+  // If omitted, all origins are allowed.
+  allowedOrigins?: string[] | ((origin: string) => boolean)
+  // The targetOrigin to use when broadcasting READY/INIT_ERROR to parent on startup.
+  // Defaults to '*'. For security, set to the exact parent origin if known.
+  targetOrigin?: string
 }
 
 type RpcMessage =
@@ -56,6 +62,14 @@ export function createIframeRpcServer<TApi extends Record<string, any>>(api: TAp
   const DEFAULT_SWEEP = 60 * 1000 // 60 seconds
   const ttlMs = Math.max(0, options.handleTtlMs ?? DEFAULT_TTL)
   const sweepMs = Math.max(0, options.sweepIntervalMs ?? DEFAULT_SWEEP)
+
+  const targetOrigin = options.targetOrigin ?? '*'
+  const isOriginAllowed = (() => {
+    if (!options.allowedOrigins) return (_origin: string) => true
+    if (typeof options.allowedOrigins === 'function') return options.allowedOrigins
+    const set = new Set(options.allowedOrigins)
+    return (origin: string) => set.has(origin)
+  })()
 
   function genId() {
     return `${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -225,14 +239,14 @@ export function createIframeRpcServer<TApi extends Record<string, any>>(api: TAp
     }
   }
 
-  function sendReady(to: Window) {
+  function sendReady(to: Window, toOrigin?: string) {
     const msg: RpcMessage = {
       rpc: 'iframe-rpc',
       name,
       type: 'READY',
       payload: { values, functions },
     }
-    to.postMessage(msg, '*')
+    to.postMessage(msg, toOrigin ?? targetOrigin)
   }
 
   function serializeResult(result: any): any {
@@ -257,13 +271,13 @@ export function createIframeRpcServer<TApi extends Record<string, any>>(api: TAp
   // 初始广播：通知父窗口此 RPC 服务已就绪
   try {
     if (window.parent && window.parent !== window) {
-      sendReady(window.parent)
+      sendReady(window.parent, targetOrigin)
     }
   } catch (err) {
     try {
       if (window.parent && window.parent !== window) {
         const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'INIT_ERROR', error: serializeError(err) }
-        window.parent.postMessage(msg, '*')
+        window.parent.postMessage(msg, targetOrigin)
       }
     } catch {
       // ignore
@@ -271,6 +285,11 @@ export function createIframeRpcServer<TApi extends Record<string, any>>(api: TAp
   }
 
   window.addEventListener('message', async (event: MessageEvent) => {
+    // 校验来源 origin
+    if (!isOriginAllowed(event.origin)) {
+      try { console.warn(`[rpc-server:${name}] blocked message from disallowed origin: ${event.origin}`) } catch {}
+      return
+    }
     const data: RpcMessage | any = event.data
     if (!data || data.rpc !== 'iframe-rpc' || data.name !== name) return
 
@@ -279,7 +298,7 @@ export function createIframeRpcServer<TApi extends Record<string, any>>(api: TAp
     if (!source) return
 
     if (data.type === 'GET') {
-      sendReady(source)
+      sendReady(source, event.origin)
       return
     }
 
@@ -300,7 +319,7 @@ export function createIframeRpcServer<TApi extends Record<string, any>>(api: TAp
         try { console.log(`[rpc-server:${name}] call on missing handle ${handle}`) } catch {}
         const errMsg = `Handle ${handle} not found`
         const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'ERROR', id, error: errMsg }
-        source.postMessage(msg, '*')
+        source.postMessage(msg, event.origin)
         return
       }
       // Update last-used timestamp for handle on every call
@@ -324,17 +343,17 @@ export function createIframeRpcServer<TApi extends Record<string, any>>(api: TAp
       if (typeof fn !== 'function') {
         const errMsg = `Method ${method || '<root>'} not found`
         const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'ERROR', id, error: errMsg }
-        source.postMessage(msg, '*')
+        source.postMessage(msg, event.origin)
         return
       }
       try {
         const result = await Promise.resolve(fn.apply(callThis, args))
         const serialized = serializeResult(result)
         const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'RESULT', id, result: serialized }
-        source.postMessage(msg, '*')
+        source.postMessage(msg, event.origin)
       } catch (err) {
         const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'ERROR', id, error: serializeError(err) }
-        source.postMessage(msg, '*')
+        source.postMessage(msg, event.origin)
       }
       return
     }

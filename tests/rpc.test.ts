@@ -8,8 +8,11 @@ class FakeWindow {
   otherListeners: Record<string, ((e: any) => void)[]> = {}
   counterpart: FakeWindow | null = null
   parent: FakeWindow = this
+  origin: string
 
-  constructor(public name: string) {}
+  constructor(public name: string, origin?: string) {
+    this.origin = origin || 'http://example.com'
+  }
 
   addEventListener(type: string, handler: (e: any) => void) {
     if (type === 'message') this.listeners.push(handler as any)
@@ -31,7 +34,7 @@ class FakeWindow {
 
   postMessage(data: any, _targetOrigin: string) {
     const source = this.counterpart ?? this
-    const event = { data, source } as unknown as MessageEvent
+    const event = { data, source, origin: source.origin } as unknown as MessageEvent
     this.listeners.forEach((h) => h(event))
   }
 
@@ -43,8 +46,8 @@ class FakeWindow {
 }
 
 function createPair() {
-  const parent = new FakeWindow('parent')
-  const child = new FakeWindow('child')
+  const parent = new FakeWindow('parent', 'http://parent.example')
+  const child = new FakeWindow('child', 'http://child.example')
   parent.counterpart = child
   child.counterpart = parent
   child.parent = parent
@@ -1031,6 +1034,74 @@ describe('iframe-rpc 集成测试', () => {
       // 字段方法（箭头函数）
       const rBar = await client.a.bar()
       expect(rBar).toBe(5)
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('origin 校验：客户端仅接受允许的 origin', async () => {
+    // child -> server origin 为 http://child.example
+    const parent = new FakeWindow('parent', 'http://parent.example')
+    const child = new FakeWindow('child', 'http://child.example')
+    parent.counterpart = child
+    child.counterpart = parent
+    child.parent = parent
+    parent.parent = parent
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<{ a: number }>('origin-ok', { allowedOrigins: ['http://child.example'] })
+      ;(globalThis as any).window = child as any
+      const api = { a: 1 }
+      createIframeRpcServer(api as any, { name: 'origin-ok' })
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      expect(client.a).toBe(1)
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('origin 校验：客户端拒绝不在白名单的 origin', async () => {
+    const parent = new FakeWindow('parent', 'http://parent.example')
+    const child = new FakeWindow('child', 'http://child.example')
+    parent.counterpart = child
+    child.counterpart = parent
+    child.parent = parent
+    parent.parent = parent
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<{ a: number }>('origin-block', { allowedOrigins: ['http://evil.example'], timeout: 50 })
+      ;(globalThis as any).window = child as any
+      const api = { a: 1 }
+      createIframeRpcServer(api as any, { name: 'origin-block' })
+      ;(globalThis as any).window = parent as any
+      await expect(clientPromise).rejects.toThrow('initialization timeout')
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('origin 校验：服务端仅处理允许来源的消息', async () => {
+    const parent = new FakeWindow('parent', 'http://parent.example')
+    const child = new FakeWindow('child', 'http://child.example')
+    parent.counterpart = child
+    child.counterpart = parent
+    child.parent = parent
+    parent.parent = parent
+    const original = globalThis.window
+    try {
+      // 允许的来源：parent.example
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<{ add: (a: number, b: number) => number }>('srv-origin')
+      ;(globalThis as any).window = child as any
+      const api = { add: (a: number, b: number) => a + b }
+      createIframeRpcServer(api as any, { name: 'srv-origin', allowedOrigins: ['http://parent.example'] })
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      const r = await client.add(3, 4)
+      expect(r).toBe(7)
     } finally {
       ;(globalThis as any).window = original
     }

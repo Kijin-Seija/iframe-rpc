@@ -404,6 +404,44 @@ export const api = {
   - 在服务端与客户端传入允许的 `origin`，对 `event.origin` 做校验
   - 根据实际需要屏蔽或过滤敏感 API
 
+### 配置允许的 origin 与发送目标 origin
+
+服务端（iframe 内）：
+
+```ts
+import { createIframeRpcServer } from 'iframe-rpc-server'
+
+createIframeRpcServer(api, {
+  name: 'docApi',
+  // 仅允许来自这些来源的消息被处理（其他来源将被忽略）
+  allowedOrigins: ['https://your-parent.com'],
+  // 启动广播 READY/INIT_ERROR 时的发送目标（默认 '*'）。已知父页面来源时建议设置为精确 origin。
+  targetOrigin: 'https://your-parent.com',
+})
+```
+
+客户端（外层页面）：
+
+```ts
+import { createIframeRpcClient } from 'iframe-rpc-client'
+
+// 如果已知 iframe 的来源，可同时设置接收与发送的校验/目标
+const iframeOrigin = new URL(document.getElementById('demo-iframe').src).origin
+
+const client = await createIframeRpcClient('docApi', {
+  // 仅接受来自这些来源的服务端消息（READY/RESULT/ERROR）
+  allowedOrigins: [iframeOrigin],
+  // 发送 CALL/RELEASE_HANDLE 时的目标（默认在握手后自动使用服务端的 event.origin）
+  targetOrigin: iframeOrigin,
+})
+```
+
+实现细节：
+
+- 客户端与服务端在处理 `message` 事件时会检查 `event.origin` 是否在 `allowedOrigins` 白名单内；不在白名单的消息将被忽略。
+- 服务端在响应消息时使用 `event.origin` 作为 `postMessage` 的 `targetOrigin`；初始向父窗口广播 `READY/INIT_ERROR` 时使用 `options.targetOrigin`（默认 `'*'`）。
+- 客户端在握手完成后记录服务端的来源，并在后续调用时优先使用该来源作为 `targetOrigin`；若显式设置了 `options.targetOrigin`，则使用该值。
+
 ## 已知限制与规划
 
 - 值快照不会自动同步：iframe 内更新 `api.a` 不会实时推送到客户端。可扩展 `UPDATE` 消息实现动态更新
