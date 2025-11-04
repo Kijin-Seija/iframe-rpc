@@ -411,7 +411,7 @@ export const api = {
  - Getter 抛错处理：初始化阶段读取 getter 抛出错误时，该属性会被跳过，不会暴露到客户端；客户端访问该键为 `undefined`。
 - 调用队列：当前不缓存握手前的调用。可选增强是在客户端内部添加队列，在 `READY` 后统一发送
 - 多实例支持：如需同时注册多个同名服务实例，可基于 `event.source` 或显式 iframe 引用区分
- - 值快照剔除函数：对象或数组中的函数不会出现在 `values` 快照中；当函数位于返回值中时通过“句柄包装”支持调用。已支持数组元素为函数的路径收集与代理（例如 `arr.0`、`arr.1.inner`）。
+ - 值快照剔除函数：对象或数组中的函数不会出现在 `values` 快照中；当函数位于返回值中时通过“句柄包装”支持调用。已支持数组元素为函数的路径收集与代理（例如 `arr.0`、`arr.1.inner`）。原型链上的方法（class 原型方法）也会被收集为函数路径并可调用，但不会作为值进入快照。
  - Map/Set 支持说明：仅支持“基本类型值”（如 `string`、`number`、`boolean`、`null`、`undefined`）作为条目值；条目中的函数会被剔除且不支持调用。Map/Set 条目中的函数不会被路径收集，如需调用函数请将函数作为对象属性或返回值中的函数暴露，由句柄代理继续调用。
  - 循环引用：值快照保留循环结构；函数路径收集采用首次遇到的最短路径。客户端对循环别名提供调用支持：别名路径自动映射到最短路径，不会出现 `undefined`。
 
@@ -430,4 +430,55 @@ export const api = {
 │  └─ rpc.test.ts
 ├─ index.html             # 外层页面
 ├─ iframe.html            # iframe 页面
+```
+
+### 结构可视化（默认物化）
+
+ 默认开启“物化模式”：客户端会将初始快照构建为真实、可枚举的对象树，并把函数作为实际属性挂载。函数来源包括：自身可枚举属性中的函数、getter 返回的函数、以及原型链上的方法（例如 class 的原型方法）。若需获得最高性能或更严格的结构隐藏，可设置 `hideStructure: true` 关闭物化，回退为懒代理。
+
+```ts
+import { createIframeRpcClient } from 'iframe-rpc-client'
+
+// 默认物化（无需传参）：
+const api = await createIframeRpcClient('testApi')
+
+// 禁用物化（最高性能/更严格结构隐藏）：
+const apiHidden = await createIframeRpcClient('testApi', { hideStructure: true })
+
+// 在物化模式下可以自然查看结构：
+console.log(Object.keys(api))           // 顶层键列表
+console.log(typeof api.nested.test)     // 'function'（真实属性）
+console.log(await api.nested.test(1))   // 11（正常调用）
+```
+
+行为说明：
+- 物化基于服务端 `READY` 的初始“值快照”，保留循环引用；例如 `cycle.self === cycle` 会在客户端保持为同一对象，别名路径下能看到并调用相同的函数属性。
+- 函数不会作为值透传，但会在其“最短路径”的父对象上挂载为真实函数属性；由于循环别名指向同一对象实例，别名路径下同样可见并可调用。
+- 这是静态结构，随后 iframe 内部值变化不会自动同步；若需要最新值，请提供无参函数（如 `getXxx()`）或扩展 `UPDATE` 协议。
+- 返回值句柄行为：默认物化返回的“对象句柄”为真实、可枚举的对象树；返回的“函数句柄”仍为轻量代理（具备 `__release()`），以便生命周期管理。开启 `hideStructure: true` 后，返回的对象句柄也回退为懒代理（不可枚举、通过 Proxy 延迟访问函数）。
+
+示例（返回值物化）：
+
+```ts
+const user = await api.getUser(1)
+console.log(Object.keys(user)) // ['id', 'name', 'reload', 'posts']
+await user.reload()
+await user.__release() // 释放后再调用将报错
+```
+
+示例（类原型方法调用与 this 绑定）：
+
+```ts
+// server
+class A {
+  n = 3
+  foo() { return this.n + 1 } // 原型方法
+  bar = () => this.n + 2      // 字段方法
+}
+createIframeRpcServer({ a: new A() }, { name: 'class-demo' })
+
+// client（默认物化）
+const api = await createIframeRpcClient('class-demo')
+console.log(await api.a.foo()) // 4（原型方法可见且 this 绑定到实例）
+console.log(await api.a.bar()) // 5（字段方法同样可调用）
 ```

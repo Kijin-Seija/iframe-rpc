@@ -120,13 +120,35 @@ export function createIframeRpcServer<TApi extends Record<string, any>>(api: TAp
     return Array.from(set)
   }
 
+  // 为函数路径收集列出候选键：
+  // - 自身可枚举属性 + accessor（与 listReadableKeys 一致）
+  // - 原型链上的“数据属性为函数”的键（排除 constructor、排除 Object.prototype）
+  function listFunctionKeysForCollect(obj: any): string[] {
+    if (!isObject(obj)) return []
+    if (isStructuredClonePassThrough(obj)) return []
+    const set = new Set<string>()
+    for (const k of listReadableKeys(obj)) set.add(k)
+    try {
+      let proto = Object.getPrototypeOf(obj)
+      while (proto && proto !== Object.prototype) {
+        for (const k of Object.getOwnPropertyNames(proto)) {
+          if (k === 'constructor' || set.has(k)) continue
+          const desc = Object.getOwnPropertyDescriptor(proto, k)
+          if (desc && typeof desc.value === 'function') set.add(k)
+        }
+        proto = Object.getPrototypeOf(proto)
+      }
+    } catch {}
+    return Array.from(set)
+  }
+
   function collectFunctionPaths(obj: any, base: string[] = [], out: string[] = [], visited: WeakSet<object> = new WeakSet()) {
     if (!isObject(obj)) return out
     // 避免循环引用导致的无限递归
     if (visited.has(obj)) return out
     visited.add(obj as object)
-    // 遍历自身与原型链上的 getter，以及自身可枚举属性
-    for (const key of listReadableKeys(obj)) {
+    // 遍历自身键、accessor 以及原型链上的方法键
+    for (const key of listFunctionKeysForCollect(obj)) {
       let v: any
       try { v = Reflect.get(obj as any, key) } catch { continue }
       const path = [...base, key]
@@ -286,7 +308,19 @@ export function createIframeRpcServer<TApi extends Record<string, any>>(api: TAp
         const meta = handleMeta.get(handle)
         if (meta) meta.lastUsed = Date.now()
       }
-      const fn = method ? getDeep(ctx as any, method) : ctx
+      let fn: any
+      let callThis: any
+      if (method) {
+        const parts = method.split('.')
+        const last = parts.pop()!
+        const parentPath = parts.join('.')
+        const target = parentPath ? getDeep(ctx as any, parentPath) : ctx
+        fn = target ? (target as any)[last] : undefined
+        callThis = target
+      } else {
+        fn = ctx
+        callThis = undefined
+      }
       if (typeof fn !== 'function') {
         const errMsg = `Method ${method || '<root>'} not found`
         const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'ERROR', id, error: errMsg }
@@ -294,7 +328,7 @@ export function createIframeRpcServer<TApi extends Record<string, any>>(api: TAp
         return
       }
       try {
-        const result = await Promise.resolve(fn(...args))
+        const result = await Promise.resolve(fn.apply(callThis, args))
         const serialized = serializeResult(result)
         const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'RESULT', id, result: serialized }
         source.postMessage(msg, '*')

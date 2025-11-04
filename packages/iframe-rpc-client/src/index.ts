@@ -54,7 +54,7 @@ export type Promisified<T> =
           ? { [K in keyof T]: Promisified<T[K]> }
           : T
 
-export function createIframeRpcClient<TApi extends Record<string, any>>(name: string, options?: { timeout?: number; gcSweepIntervalMs?: number; releaseOnPageHide?: 'nonPersisted' | 'all' | 'off' }): Promise<Promisified<TApi>> {
+export function createIframeRpcClient<TApi extends Record<string, any>>(name: string, options?: { timeout?: number; gcSweepIntervalMs?: number; releaseOnPageHide?: 'nonPersisted' | 'all' | 'off'; hideStructure?: boolean }): Promise<Promisified<TApi>> {
   return new Promise((resolve, reject) => {
     let targetWindow: Window | null = null
     let values: Record<string, any> = {}
@@ -192,122 +192,295 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
       return false
     }
 
-    function createLevelProxy(prefix: string): any {
-      const proxy = new Proxy(
-        {},
-        {
-          get(_target, prop) {
-            const key = String(prop)
-            const fullPath = prefix ? `${prefix}.${key}` : key
-            // 支持循环别名：在 functionSet 中未出现的别名路径，尝试映射到最短路径
-            const resolvedFnPath = resolveAliasFunctionPath(prefix, key)
-            if (resolvedFnPath) {
-              return (...args: any[]) => {
-                const tw = targetWindow
-                if (!tw) return Promise.reject(new Error('RPC target not ready'))
-                const id = genId()
-                const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'CALL', id, method: resolvedFnPath, args }
-                try { console.log(`[rpc-client:${name}] CALL root method=${resolvedFnPath} id=${id}`) } catch {}
-                return new Promise((resolve, reject) => {
-                  pending.set(id, { resolve, reject })
-                  tw.postMessage(msg, '*')
-                })
-              }
-            }
-            const v = getDeep(values, fullPath)
-            if (v !== undefined) {
-              if (v !== null && typeof v === 'object') {
-                if (isStructuredClonePassThrough(v)) return v
-                return createLevelProxy(fullPath)
-              }
-              return v
-            }
-            // Even if value not present, still expose nested proxy if there are functions under this path
-            // 别名路径的函数存在于其“最短路径”下时也暴露嵌套代理
-            if (hasFunctionUnder(fullPath)) return createLevelProxy(fullPath)
-            const parentObj = getDeep(values, prefix)
-            if (parentObj && typeof parentObj === 'object') {
-              const canon = canonicalIndex.get(parentObj as object)
-              const aliasPrefix = canon ? `${canon}.${key}` : key
-              if (hasFunctionUnder(aliasPrefix)) return createLevelProxy(fullPath)
-            }
-            return undefined
-          },
+    // 默认启用物化；设置 hideStructure: true 可关闭物化（最高性能/更严格结构隐藏）
+    const materializeStructure = options?.hideStructure === true ? false : true
+
+    // 物化模式已不再需要枚举键的辅助函数
+
+    function makeRootFunctionProxy(method: string) {
+      return (...args: any[]) => {
+        const tw = targetWindow
+        if (!tw) return Promise.reject(new Error('RPC target not ready'))
+        const id = genId()
+        const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'CALL', id, method, args }
+        try { console.log(`[rpc-client:${name}] CALL root method=${method} id=${id}`) } catch {}
+        return new Promise((resolve, reject) => {
+          pending.set(id, { resolve, reject })
+          tw.postMessage(msg, '*')
+        })
+      }
+    }
+
+    function readRootValue(prefix: string, key: string): any {
+      const fullPath = prefix ? `${prefix}.${key}` : key
+      const resolvedFnPath = resolveAliasFunctionPath(prefix, key)
+      if (resolvedFnPath) return makeRootFunctionProxy(resolvedFnPath)
+      const v = getDeep(values, fullPath)
+      if (v !== undefined) {
+        if (v !== null && typeof v === 'object') {
+          if (isStructuredClonePassThrough(v)) return v
+          return createLevelProxy(fullPath)
         }
-      )
-      return proxy
+        return v
+      }
+      // 函数在别名的最短路径下，仍暴露嵌套代理
+      if (hasFunctionUnder(fullPath)) return createLevelProxy(fullPath)
+      const parentObj = getDeep(values, prefix)
+      if (parentObj && typeof parentObj === 'object') {
+        const canon = canonicalIndex.get(parentObj as object)
+        const aliasPrefix = canon ? `${canon}.${key}` : key
+        if (hasFunctionUnder(aliasPrefix)) return createLevelProxy(fullPath)
+      }
+      return undefined
+    }
+
+    function createLevelProxy(prefix: string): any {
+      const handler: ProxyHandler<any> = {
+        get(_target, prop) {
+          const key = String(prop)
+          return readRootValue(prefix, key)
+        },
+      }
+      return new Proxy({}, handler)
+    }
+
+    // 物化模式：构建真实对象树并将函数作为实际属性挂载
+    function createMaterializedRoot(): any {
+      // 从值快照深度克隆为可枚举对象，保留循环结构
+      const srcRoot = values
+      const mapSrcToDest = new WeakMap<object, any>()
+      function cloneNode(src: any): any {
+        if (!src || typeof src !== 'object') return src
+        if (isStructuredClonePassThrough(src)) return src
+        const hit = mapSrcToDest.get(src as object)
+        if (hit) return hit
+        let dest: any
+        if (Array.isArray(src)) {
+          dest = []
+          mapSrcToDest.set(src as object, dest)
+          for (let i = 0; i < src.length; i++) {
+            dest[i] = cloneNode(src[i])
+          }
+        } else {
+          dest = {}
+          mapSrcToDest.set(src as object, dest)
+          for (const k of Object.keys(src)) {
+            dest[k] = cloneNode(src[k])
+          }
+        }
+        return dest
+      }
+      const root = cloneNode(srcRoot)
+
+      // 回退：当某函数父路径不在值快照中时，在物化对象上按需创建中间节点
+      function ensureTargetForParentPath(parentPath: string): any {
+        if (!parentPath) return root
+        const srcParent = getDeep(values, parentPath)
+        if (srcParent && typeof srcParent === 'object' && !isStructuredClonePassThrough(srcParent)) {
+          const dest = mapSrcToDest.get(srcParent as object)
+          if (dest) return dest
+        }
+        const parts = parentPath.split('.')
+        let cur: any = root
+        let curPath = ''
+        for (let i = 0; i < parts.length; i++) {
+          const seg = parts[i]
+          curPath = curPath ? `${curPath}.${seg}` : seg
+          const nextSrc = getDeep(values, curPath)
+          if (Array.isArray(cur)) {
+            const idx = Number(seg)
+            if (!Number.isNaN(idx)) {
+              if (cur[idx] === undefined || cur[idx] === null || typeof cur[idx] !== 'object') cur[idx] = {}
+              cur = cur[idx]
+              continue
+            }
+            if (!(cur as any)[seg] || typeof (cur as any)[seg] !== 'object') (cur as any)[seg] = {}
+            cur = (cur as any)[seg]
+          } else {
+            if (!(cur as any)[seg] || typeof (cur as any)[seg] !== 'object') {
+              (cur as any)[seg] = Array.isArray(nextSrc) ? [] : {}
+            }
+            cur = (cur as any)[seg]
+          }
+        }
+        return cur
+      }
+
+      for (const method of functionSet) {
+        const idx = method.lastIndexOf('.')
+        const parentPath = idx >= 0 ? method.slice(0, idx) : ''
+        const leafKey = idx >= 0 ? method.slice(idx + 1) : method
+        const parentObj = ensureTargetForParentPath(parentPath)
+        parentObj[leafKey] = makeRootFunctionProxy(method)
+      }
+
+      return root
     }
 
     function createScopedProxy(handleId: string, scopedValues: Record<string, any>, scopedFunctions: string[], prefix: string): any {
       const functionSetLocal = new Set<string>(scopedFunctions)
       const canonicalIndexLocal = buildCanonicalIndex(scopedValues)
       const target: Record<string, any> = {}
-      const proxy = new Proxy(
-        target,
-        {
-          get(_target, prop) {
-            const key = String(prop)
-            const fullPath = prefix ? `${prefix}.${key}` : key
-            if (key === '__release') {
-              return () => releaseHandle(handleId)
-            }
-            // 支持循环别名：在本地 functionSetLocal 未出现的别名路径，尝试映射到最短路径
-            const resolveLocal = () => {
-              const direct = fullPath
-              if (functionSetLocal.has(direct)) return direct
-              const parentObj = getDeep(scopedValues, prefix)
-              if (!parentObj || typeof parentObj !== 'object') return null
-              const canon = canonicalIndexLocal.get(parentObj as object)
-              if (!canon && canon !== '') return null
-              const candidate = canon ? `${canon}.${key}` : key
-              return functionSetLocal.has(candidate) ? candidate : null
-            }
-            const resolvedFnPath = resolveLocal()
-            if (resolvedFnPath) {
-              return (...args: any[]) => {
-                if (released.has(handleId)) return Promise.reject(new Error(`Handle ${handleId} released`))
-                const tw = targetWindow
-                if (!tw) return Promise.reject(new Error('RPC target not ready'))
-                const id = genId()
-                const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'CALL', id, method: resolvedFnPath, args, handle: handleId }
-                try { console.log(`[rpc-client:${name}] CALL handle=${handleId} method=${resolvedFnPath} id=${id}`) } catch {}
-                return new Promise((resolve, reject) => {
-                  pending.set(id, { resolve, reject })
-                  tw.postMessage(msg, '*')
-                })
-              }
-            }
-            const v = getDeep(scopedValues, fullPath)
-            if (v !== undefined) {
-              if (v !== null && typeof v === 'object') {
-                if (isStructuredClonePassThrough(v)) return v
-                return createScopedProxy(handleId, scopedValues, scopedFunctions, fullPath)
-              }
-              return v
-            }
-            const pre = prefix ? prefix + '.' : ''
-            // 针对别名路径，检查其“最短路径”下是否仍有函数存在
-            if ([...functionSetLocal].some((f) => f === fullPath || f.startsWith(pre + key + '.'))) {
-              return createScopedProxy(handleId, scopedValues, scopedFunctions, fullPath)
-            }
-            const parentObj = getDeep(scopedValues, prefix)
-            if (parentObj && typeof parentObj === 'object') {
-              const canon = canonicalIndexLocal.get(parentObj as object)
-              const aliasPrefix = canon ? `${canon}.${key}` : key
-              const preAlias = aliasPrefix ? aliasPrefix + '.' : ''
-              if ([...functionSetLocal].some((f) => f === aliasPrefix || f.startsWith(preAlias))) {
-                return createScopedProxy(handleId, scopedValues, scopedFunctions, fullPath)
-              }
-            }
-            return undefined
-          },
+
+      function makeHandleFunctionProxy(method: string) {
+        return (...args: any[]) => {
+          if (released.has(handleId)) return Promise.reject(new Error(`Handle ${handleId} released`))
+          const tw = targetWindow
+          if (!tw) return Promise.reject(new Error('RPC target not ready'))
+          const id = genId()
+          const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'CALL', id, method, args, handle: handleId }
+          try { console.log(`[rpc-client:${name}] CALL handle=${handleId} method=${method} id=${id}`) } catch {}
+          return new Promise((resolve, reject) => {
+            pending.set(id, { resolve, reject })
+            tw.postMessage(msg, '*')
+          })
         }
-      )
+      }
+
+      function readScopedValue(key: string): any {
+        const fullPath = prefix ? `${prefix}.${key}` : key
+        if (key === '__release') return () => releaseHandle(handleId)
+        const resolveLocal = () => {
+          const direct = fullPath
+          if (functionSetLocal.has(direct)) return direct
+          const parentObj = getDeep(scopedValues, prefix)
+          if (!parentObj || typeof parentObj !== 'object') return null
+          const canon = canonicalIndexLocal.get(parentObj as object)
+          if (!canon && canon !== '') return null
+          const candidate = canon ? `${canon}.${key}` : key
+          return functionSetLocal.has(candidate) ? candidate : null
+        }
+        const resolvedFnPath = resolveLocal()
+        if (resolvedFnPath) return makeHandleFunctionProxy(resolvedFnPath)
+        const v = getDeep(scopedValues, fullPath)
+        if (v !== undefined) {
+          if (v !== null && typeof v === 'object') {
+            if (isStructuredClonePassThrough(v)) return v
+            return createScopedProxy(handleId, scopedValues, scopedFunctions, fullPath)
+          }
+          return v
+        }
+        const pre = prefix ? prefix + '.' : ''
+        if ([...functionSetLocal].some((f) => f === fullPath || f.startsWith(pre + key + '.'))) {
+          return createScopedProxy(handleId, scopedValues, scopedFunctions, fullPath)
+        }
+        const parentObj = getDeep(scopedValues, prefix)
+        if (parentObj && typeof parentObj === 'object') {
+          const canon = canonicalIndexLocal.get(parentObj as object)
+          const aliasPrefix = canon ? `${canon}.${key}` : key
+          const preAlias = aliasPrefix ? aliasPrefix + '.' : ''
+          if ([...functionSetLocal].some((f) => f === aliasPrefix || f.startsWith(preAlias))) {
+            return createScopedProxy(handleId, scopedValues, scopedFunctions, fullPath)
+          }
+        }
+        return undefined
+      }
+
+      const handler: ProxyHandler<any> = {
+        get(_target, prop) {
+          return readScopedValue(String(prop))
+        },
+      }
+      const proxy = new Proxy(target, handler)
       // 自动释放：FinalizationRegistry 优先，WeakRef 作为降级轮询
       if (FinalReg) FinalReg.register(proxy, handleId)
       if (weakRefAvailable) activeHandles.set(handleId, { weakRef: new WeakRef(proxy) })
       startWeakRefSweeper()
       return proxy
+    }
+
+    // 物化模式：将返回值句柄对象物化为真实对象树，并挂载函数属性
+    function createMaterializedHandle(handleId: string, scopedValues: Record<string, any>, scopedFunctions: string[]): any {
+      const functionSetLocal = new Set<string>(scopedFunctions)
+      const mapSrcToDest = new WeakMap<object, any>()
+
+      function cloneNode(src: any): any {
+        if (!src || typeof src !== 'object') return src
+        if (isStructuredClonePassThrough(src)) return src
+        const hit = mapSrcToDest.get(src as object)
+        if (hit) return hit
+        let dest: any
+        if (Array.isArray(src)) {
+          dest = []
+          mapSrcToDest.set(src as object, dest)
+          for (let i = 0; i < src.length; i++) {
+            dest[i] = cloneNode(src[i])
+          }
+        } else {
+          dest = {}
+          mapSrcToDest.set(src as object, dest)
+          for (const k of Object.keys(src)) {
+            dest[k] = cloneNode(src[k])
+          }
+        }
+        return dest
+      }
+
+      const root = cloneNode(scopedValues)
+
+      function ensureTargetForParentPathLocal(parentPath: string): any {
+        if (!parentPath) return root
+        const srcParent = getDeep(scopedValues, parentPath)
+        if (srcParent && typeof srcParent === 'object' && !isStructuredClonePassThrough(srcParent)) {
+          const dest = mapSrcToDest.get(srcParent as object)
+          if (dest) return dest
+        }
+        const parts = parentPath.split('.')
+        let cur: any = root
+        let curPath = ''
+        for (let i = 0; i < parts.length; i++) {
+          const seg = parts[i]
+          curPath = curPath ? `${curPath}.${seg}` : seg
+          const nextSrc = getDeep(scopedValues, curPath)
+          if (Array.isArray(cur)) {
+            const idx = Number(seg)
+            if (!Number.isNaN(idx)) {
+              if (cur[idx] === undefined || cur[idx] === null || typeof cur[idx] !== 'object') cur[idx] = {}
+              cur = cur[idx]
+              continue
+            }
+            if (!(cur as any)[seg] || typeof (cur as any)[seg] !== 'object') (cur as any)[seg] = {}
+            cur = (cur as any)[seg]
+          } else {
+            if (!(cur as any)[seg] || typeof (cur as any)[seg] !== 'object') {
+              (cur as any)[seg] = Array.isArray(nextSrc) ? [] : {}
+            }
+            cur = (cur as any)[seg]
+          }
+        }
+        return cur
+      }
+
+      function makeHandleFunctionProxy(method: string) {
+        return (...args: any[]) => {
+          if (released.has(handleId)) return Promise.reject(new Error(`Handle ${handleId} released`))
+          const tw = targetWindow
+          if (!tw) return Promise.reject(new Error('RPC target not ready'))
+          const id = genId()
+          const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'CALL', id, method, args, handle: handleId }
+          try { console.log(`[rpc-client:${name}] CALL handle=${handleId} method=${method} id=${id}`) } catch {}
+          return new Promise((resolve, reject) => {
+            pending.set(id, { resolve, reject })
+            tw.postMessage(msg, '*')
+          })
+        }
+      }
+
+      for (const method of functionSetLocal) {
+        const idx = method.lastIndexOf('.')
+        const parentPath = idx >= 0 ? method.slice(0, idx) : ''
+        const leafKey = idx >= 0 ? method.slice(idx + 1) : method
+        const parentObj = ensureTargetForParentPathLocal(parentPath)
+        parentObj[leafKey] = makeHandleFunctionProxy(method)
+      }
+
+      ;(root as any).__release = () => releaseHandle(handleId)
+      if (FinalReg) {
+        try { FinalReg.register(root, handleId) } catch {}
+      }
+      if (weakRefAvailable) activeHandles.set(handleId, { weakRef: new WeakRef(root) })
+      startWeakRefSweeper()
+      return root
     }
 
     function fromResultPayload(payload: any): any {
@@ -339,7 +512,10 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
           startWeakRefSweeper()
           return fn
         }
-        // default to object proxy
+        // object handle：根据是否物化返回物化对象或懒代理
+        if (materializeStructure) {
+          return createMaterializedHandle(id, vals, funcs)
+        }
         return createScopedProxy(id, vals, funcs, '')
       }
       return payload
@@ -356,7 +532,11 @@ export function createIframeRpcClient<TApi extends Record<string, any>>(name: st
         canonicalIndex = buildCanonicalIndex(values)
         functionSet.clear()
         for (const fnName of data.payload.functions || []) functionSet.add(fnName)
-        resolve(createLevelProxy('') as Promisified<TApi>)
+        if (materializeStructure) {
+          resolve(createMaterializedRoot() as Promisified<TApi>)
+        } else {
+          resolve(createLevelProxy('') as Promisified<TApi>)
+        }
         return
       }
 

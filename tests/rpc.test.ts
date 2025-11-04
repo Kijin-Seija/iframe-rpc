@@ -882,4 +882,157 @@ describe('iframe-rpc 集成测试', () => {
       ;(globalThis as any).window = original
     }
   })
+
+  it('非物化模式：返回对象懒代理不可枚举但可调用', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<TestApi>('materialize-object', { hideStructure: true })
+
+      ;(globalThis as any).window = child as any
+      const api: TestApi = {
+        a: 1,
+        test: (n: number) => n + 1,
+        nested: { a: 2, test: (n: number) => n + 10, nested: { a: 3, test: (n: number) => n + 100 } },
+        testNested: (param: number) => ({ a: param + 1000, test: (n: number) => n + 1000 }),
+        mkAdder: (x: number) => (y: number) => x + y,
+        makeObj: (seed: number) => ({ val: seed, nested: { val: seed + 1, fn: (n: number) => n + seed, deeper: { val: seed + 2, fn2: (n: number) => n + seed * 2 } }, fn: (n: number) => ({ val: n + seed, deepFn: (m: number) => m + n + seed }) }),
+      }
+      createIframeRpcServer(api as any, { name: 'materialize-object' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      const obj = await client.testNested(1)
+      const keys = Object.keys(obj)
+      expect(keys.includes('a')).toBe(false)
+      expect(keys.includes('test')).toBe(false)
+      expect(typeof obj.test).toBe('function')
+      const r = await obj.test(1)
+      expect(r).toBe(1001)
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('非物化模式：返回数组可索引调用但不可枚举', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<{ mkArr: (seed: number) => any[] }>('materialize-array', { hideStructure: true })
+
+      ;(globalThis as any).window = child as any
+      const api = {
+        mkArr: async (seed: number) => [
+          (n: number) => n + seed,
+          { inner: (n: number) => n + seed * 10 },
+        ],
+      }
+      createIframeRpcServer(api as any, { name: 'materialize-array' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      const arr = await client.mkArr(2)
+      const r0 = await arr[0](3)
+      expect(r0).toBe(5)
+      const r1 = await arr[1].inner(1)
+      expect(r1).toBe(21)
+      const k = Object.keys(arr)
+      expect(k.includes('0')).toBe(false)
+      expect(k.includes('1')).toBe(false)
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('非物化模式：循环别名路径下函数可见并可调用', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<{ mkCyclic: (seed: number) => any }>('materialize-cycle', { hideStructure: true })
+
+      ;(globalThis as any).window = child as any
+      const api = {
+        mkCyclic: (seed: number) => {
+          const o: any = { a: seed }
+          o.self = o
+          o.nested = { val: seed + 1 }
+          o.nested.parent = o
+          o.nested.fn = (n: number) => n + o.a
+          return o
+        },
+      }
+      createIframeRpcServer(api as any, { name: 'materialize-cycle' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      const obj = await client.mkCyclic(10)
+      expect(typeof obj.self.nested.fn).toBe('function')
+      const r = await obj.self.nested.fn(5)
+      expect(r).toBe(15)
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('非物化模式：返回对象支持 __release 并释放后调用报错', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<TestApi>('materialize-release', { hideStructure: true })
+
+      ;(globalThis as any).window = child as any
+      const api: TestApi = {
+        a: 1,
+        test: (n: number) => n + 1,
+        nested: { a: 2, test: (n: number) => n + 10, nested: { a: 3, test: (n: number) => n + 100 } },
+        testNested: (param: number) => ({ a: param, test: (n: number) => n + param }),
+        mkAdder: (x: number) => (y: number) => x + y,
+        makeObj: (seed: number) => ({ val: seed, nested: { val: seed + 1, fn: (n: number) => n + seed, deeper: { val: seed + 2, fn2: (n: number) => n + seed * 2 } }, fn: (n: number) => ({ val: n + seed, deepFn: (m: number) => m + n + seed }) }),
+      }
+      createIframeRpcServer(api as any, { name: 'materialize-release' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      const obj = await client.testNested(5)
+      const r1 = await obj.test(1)
+      expect(r1).toBe(6)
+      ;(obj as any).__release()
+      await expect(obj.test(1)).rejects.toThrow('Handle')
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('物化模式：类实例原型方法与字段方法均可调用且保持 this', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<{ a: any }>('class-methods')
+
+      ;(globalThis as any).window = child as any
+      class A {
+        n = 3
+        foo() { return this.n + 1 }
+        bar = () => this.n + 2
+      }
+      const api = { a: new A() }
+      createIframeRpcServer(api as any, { name: 'class-methods' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      // 原型方法
+      const rFoo = await client.a.foo()
+      expect(rFoo).toBe(4)
+      // 字段方法（箭头函数）
+      const rBar = await client.a.bar()
+      expect(rBar).toBe(5)
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
 })

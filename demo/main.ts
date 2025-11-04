@@ -19,6 +19,9 @@ function log(msg: string) {
 
 ;(async () => {
   const myApi = await createIframeRpcClient<TestApi>('testApi')
+  ;(window as any).api = myApi
+  log('window.api = myApi')
+  console.log(myApi)
   log('client ready')
   log('myApi.a = ' + myApi.a)
   const r = await myApi.test(1)
