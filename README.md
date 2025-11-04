@@ -14,6 +14,7 @@
 - 函数 Promise 化：所有函数调用返回 `Promise<结果>`
 - 简单协议：`READY / GET / CALL / RESULT / ERROR`
 - 支持并发：多个调用互不干扰，按 `id` 关联结果
+ - Getter 值支持：服务端在构建“值快照”时会读取对象上的 getter（包含原型链与非枚举的 getter），并以“当前值”传递到客户端；不保留 getter 的动态语义（不会自动更新）
  - 支持嵌套对象与嵌套返回：值深度复刻（剔除函数），函数以“点路径”暴露（如 `nested.test`）；同时支持“函数返回对象（包含函数）”“函数返回函数”等场景，客户端会为返回值创建临时代理并继续调用
  - 初始化错误提示与超时：服务端初始广播失败会发送 `INIT_ERROR`；客户端支持握手超时（可配置），在失败或超时时明确提示
  - 返回值句柄释放：函数返回对象/函数时会创建“临时句柄”（handle）；支持显式释放与自动释放，避免句柄长期常驻
@@ -163,6 +164,51 @@ createIframeRpcServer(api, {
 // - 每次基于句柄的调用都会刷新 lastUsed
 // - 清扫器会定期删除超过 TTL 的句柄；此后再次调用该句柄会返回 ERROR: Handle <id> not found
 ```
+
+## Getter 支持与错误处理
+
+行为概述：
+
+- 服务端在 `READY` 构建快照时会读取对象上的 getter（包含自身可枚举属性、自身非枚举的访问器属性，以及原型链上的访问器属性，排除 `constructor`），并将“当前值”传递到客户端的 `values`。不保留 getter 的动态语义（不会自动刷新）。
+- 若读取某个 getter 抛出错误，服务端会跳过该属性，不将其暴露到客户端。此时客户端访问该键返回 `undefined`，且不会生成函数代理。
+
+示例：
+
+```ts
+// server
+import { createIframeRpcServer } from 'iframe-rpc-server'
+
+const api: any = {
+  get title() { return 'Hello' },
+  get unstable() { throw new Error('not-ready') }
+}
+Object.defineProperty(api, 'hidden', {
+  get() { return 42 },
+  enumerable: false
+})
+
+class Doc {
+  private _count = 7
+  get count() { return this._count }
+}
+api.doc = new Doc()
+
+createIframeRpcServer(api, { name: 'docApi' })
+
+// client
+import { createIframeRpcClient } from 'iframe-rpc-client'
+const client = await createIframeRpcClient('docApi')
+console.log(client.title)     // 'Hello'
+console.log(client.count)     // 7（原型链 getter）
+console.log(client.hidden)    // 42（非枚举 getter）
+console.log(client.unstable)  // undefined（读取时抛错，已跳过）
+```
+
+最佳实践：
+
+- 若需要“最新值”，提供无参函数（如 `getTitle()`）并在客户端以 `await` 调用，或实现增量 `UPDATE` 推送协议。
+- getter 返回值需可结构化克隆；函数不会作为值克隆，而是通过函数路径暴露。
+- 避免在初始化阶段 getter 执行重计算或副作用；将耗时逻辑放到显式函数里。
 
 ## TypeScript 支持
 
@@ -361,6 +407,8 @@ export const api = {
 ## 已知限制与规划
 
 - 值快照不会自动同步：iframe 内更新 `api.a` 不会实时推送到客户端。可扩展 `UPDATE` 消息实现动态更新
+ - Getter 行为说明：客户端拿到的是初始化时的 getter 当前值，不会自动刷新。如需取最新值，请在服务端提供无参函数并在客户端异步调用，或扩展 `UPDATE` 推送。
+ - Getter 抛错处理：初始化阶段读取 getter 抛出错误时，该属性会被跳过，不会暴露到客户端；客户端访问该键为 `undefined`。
 - 调用队列：当前不缓存握手前的调用。可选增强是在客户端内部添加队列，在 `READY` 后统一发送
 - 多实例支持：如需同时注册多个同名服务实例，可基于 `event.source` 或显式 iframe 引用区分
  - 值快照剔除函数：对象或数组中的函数不会出现在 `values` 快照中；当函数位于返回值中时通过“句柄包装”支持调用。已支持数组元素为函数的路径收集与代理（例如 `arr.0`、`arr.1.inner`）。

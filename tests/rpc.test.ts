@@ -75,6 +75,96 @@ describe('iframe-rpc 集成测试', () => {
     }
   })
 
+  it('服务端 getter 的当前值会在 READY 快照中传递（对象字面量）', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<{ title: string }>('getter-literal')
+
+      ;(globalThis as any).window = child as any
+      const api = {
+        get title() { return 'Hello Getter' },
+      }
+      createIframeRpcServer(api as any, { name: 'getter-literal' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      expect(client.title).toBe('Hello Getter')
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('服务端原型链上的 getter 也能传递（类实例）', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    class Doc {
+      get title() { return 'Proto Getter' }
+    }
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<{ title: string }>('getter-proto')
+
+      ;(globalThis as any).window = child as any
+      const api = new Doc()
+      createIframeRpcServer(api as any, { name: 'getter-proto' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      expect(client.title).toBe('Proto Getter')
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('非枚举的 getter 也会被读取并传递值', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<{ secret: number }>('getter-nonenumerable')
+
+      ;(globalThis as any).window = child as any
+      const api: any = {}
+      Object.defineProperty(api, 'secret', {
+        get() { return 42 },
+        enumerable: false,
+      })
+      createIframeRpcServer(api as any, { name: 'getter-nonenumerable' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      expect(client.secret).toBe(42)
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
+  it('getter 抛错时跳过该属性，不在客户端暴露', async () => {
+    const { parent, child } = createPair()
+    const original = globalThis.window
+    try {
+      ;(globalThis as any).window = parent as any
+      const clientPromise = createIframeRpcClient<{ ok: number }>('getter-throws')
+
+      ;(globalThis as any).window = child as any
+      const api: any = { ok: 1 }
+      Object.defineProperty(api, 'unstable', {
+        get() { throw new Error('not-ready') },
+        enumerable: true,
+      })
+      createIframeRpcServer(api as any, { name: 'getter-throws' })
+
+      ;(globalThis as any).window = parent as any
+      const client = await clientPromise
+      expect(client.ok).toBe(1)
+      expect((client as any).unstable).toBeUndefined()
+    } finally {
+      ;(globalThis as any).window = original
+    }
+  })
+
   it('错误通过拒绝的 Promise 传播', async () => {
     const { parent, child } = createPair()
     const original = globalThis.window
