@@ -11,7 +11,8 @@
     "build": "npm run build -w iframe-rpc-server && npm run build -w iframe-rpc-client",
     "preview": "vite preview",
     "test": "tsc -p tsconfig.json && vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "publish:all": "npm run build && npm publish -w iframe-rpc-server && npm publish -w iframe-rpc-client"
   },
   "devDependencies": {
     "typescript": "~5.9.3",

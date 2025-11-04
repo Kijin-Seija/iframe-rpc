@@ -218,12 +218,15 @@ type MyApi = Promisified<TestApi> // 深度 Promise 化，嵌套函数也映射�
 ## 构建与发布
 
 - 构建两个包：`npm run build`
+- 一键发布：`npm run publish:all`（先编译，再依次发布两个包）
 - 产物输出：
   - `packages/iframe-rpc-server/dist/index.js`（ESM），`index.umd.cjs`（UMD）
   - `packages/iframe-rpc-client/dist/index.js`（ESM），`index.umd.cjs`（UMD）
 - 发布（示例）：
   - `npm publish -w iframe-rpc-server`
   - `npm publish -w iframe-rpc-client`
+
+提示：执行发布前需先完成 `npm login` 并拥有对应包的发布权限；如需仅验证构建可先运行 `npm run build`。
 
 ## 单元测试
 
@@ -380,4 +383,3 @@ export const api = {
 ├─ index.html             # 外层页面
 ├─ iframe.html            # iframe 页面
 ```
-
