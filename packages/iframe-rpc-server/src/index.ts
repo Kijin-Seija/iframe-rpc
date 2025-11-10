@@ -1,330 +1,150 @@
-export type CreateIframeRpcServerOptions = {
-  name: string
-  // Idle time-to-live (TTL) for returned handles (functions/objects). Defaults to 10 minutes.
-  handleTtlMs?: number
-  // How often to run the sweeping task that evicts expired handles. Defaults to 60 seconds.
-  sweepIntervalMs?: number
-  // Restrict which origins are allowed to send messages to this server.
-  // If omitted, all origins are allowed.
-  allowedOrigins?: string[] | ((origin: string) => boolean)
-  // The targetOrigin to use when broadcasting READY/INIT_ERROR to parent on startup.
-  // Defaults to '*'. For security, set to the exact parent origin if known.
-  targetOrigin?: string
-}
+import type { CreateIframeRpcServerOptions, RpcMessage } from '../../../shared/types.ts'
+export type { CreateIframeRpcServerOptions } from '../../../shared/types.ts'
+import { isObject, collectFunctionPaths, cloneValuesOnly, serializeError, getDeep, genId } from '../../../shared/utils.ts'
 
-type RpcMessage =
-  | {
-      rpc: 'iframe-rpc'
-      name: string
-      type: 'GET' | 'READY'
-      payload?: {
-        values: Record<string, any>
-        functions: string[]
-      }
+/**
+ * Iframe RPC 服务端：驻留于 iframe 页面中，暴露传入的 API，
+ * 负责值快照与函数路径收集、处理客户端调用并按需返回句柄。
+ *
+ * 设计要点：
+ * - 通过 `collectFunctionPaths` 收集 API 中所有可调用函数的路径，便于客户端生成代理。
+ * - 对返回值进行序列化：无函数直接返回，有函数则生成可释放的句柄（handle）。
+ * - 维护句柄 TTL 与周期清扫，避免长时间占用内存与资源。
+ * - 通过 `allowedOrigins` 与 `targetOrigin` 控制消息来源与发送目标，确保安全。
+ *
+ * TApi 为暴露给客户端的远程 API 形状。
+ */
+export class IframeRpcServer<TApi extends Record<string, any>> {
+  /** 通道名称：用于消息识别与匹配 */
+  private name: string
+  /** 远程 API 实例：对外暴露的方法与数据 */
+  private api: TApi
+  /** 句柄表：记录返回的函数/对象句柄 id -> 实际值 */
+  private handles: Map<string, any> = new Map()
+  /** 句柄元数据：currently 仅记录 lastUsed 时间戳，用于 TTL 清理 */
+  private handleMeta: Map<string, { lastUsed: number }> = new Map()
+  /** 句柄生存时间（毫秒）：超过该时间未使用的句柄将被清理 */
+  private ttlMs: number
+  /** 清扫间隔（毫秒）：定时扫描句柄并按 TTL 驱逐 */
+  private sweepMs: number
+  /** 发送目标 origin：postMessage 时使用，默认 '*' */
+  private targetOrigin: string
+  /** 来源校验函数：根据配置生成，决定是否处理消息 */
+  private isOriginAllowed: (origin: string) => boolean
+  /** API 的值快照：剔除函数，仅保留可结构化克隆的值 */
+  private values: Record<string, any>
+  /** API 的函数路径列表：用于客户端生成代理与可见性判断 */
+  private functions: string[]
+
+  /**
+   * 构造函数：初始化服务端实例与各项策略。
+   * - name：RPC 通道名称。
+   * - handleTtlMs：句柄 TTL 毫秒数（默认 10 分钟）。
+   * - sweepIntervalMs：句柄清扫间隔（默认 60 秒）。
+   * - allowedOrigins：允许的消息来源（字符串列表或校验函数）。
+   * - targetOrigin：postMessage 目标 origin（默认 '*'）。
+   */
+  constructor(api: TApi, options: CreateIframeRpcServerOptions) {
+    this.api = api
+    this.name = options.name
+    const DEFAULT_TTL = 10 * 60 * 1000
+    const DEFAULT_SWEEP = 60 * 1000
+    this.ttlMs = Math.max(0, options.handleTtlMs ?? DEFAULT_TTL)
+    this.sweepMs = Math.max(0, options.sweepIntervalMs ?? DEFAULT_SWEEP)
+    this.targetOrigin = options.targetOrigin ?? '*'
+    if (!options.allowedOrigins) {
+      this.isOriginAllowed = (_: string) => true
+    } else if (typeof options.allowedOrigins === 'function') {
+      this.isOriginAllowed = options.allowedOrigins
+    } else {
+      const set = new Set(options.allowedOrigins)
+      this.isOriginAllowed = (origin: string) => set.has(origin)
     }
-  | {
-      rpc: 'iframe-rpc'
-      name: string
-      type: 'CALL'
-      id: string
-      method: string
-      args: any[]
-      // optional handle id for calling functions on returned objects/functions
-      handle?: string
-    }
-  | {
-      rpc: 'iframe-rpc'
-      name: string
-      type: 'RESULT' | 'ERROR'
-      id: string
-      result?: any
-      error?: string
-    }
-  | {
-      rpc: 'iframe-rpc'
-      name: string
-      type: 'INIT_ERROR'
-      error: string
-    }
-  | {
-      rpc: 'iframe-rpc'
-      name: string
-      type: 'RELEASE_HANDLE'
-      handle: string
-    }
 
-export function createIframeRpcServer<TApi extends Record<string, any>>(api: TApi, options: CreateIframeRpcServerOptions) {
-  const { name } = options
-  const handles = new Map<string, any>()
-  const handleMeta = new Map<string, { lastUsed: number }>()
+    this.values = cloneValuesOnly(api)
+    this.functions = collectFunctionPaths(api)
 
-  const DEFAULT_TTL = 10 * 60 * 1000 // 10 minutes
-  const DEFAULT_SWEEP = 60 * 1000 // 60 seconds
-  const ttlMs = Math.max(0, options.handleTtlMs ?? DEFAULT_TTL)
-  const sweepMs = Math.max(0, options.sweepIntervalMs ?? DEFAULT_SWEEP)
-
-  const targetOrigin = options.targetOrigin ?? '*'
-  const isOriginAllowed = (() => {
-    if (!options.allowedOrigins) return (_origin: string) => true
-    if (typeof options.allowedOrigins === 'function') return options.allowedOrigins
-    const set = new Set(options.allowedOrigins)
-    return (origin: string) => set.has(origin)
-  })()
-
-  function genId() {
-    return `${Date.now()}-${Math.random().toString(36).slice(2)}`
-  }
-
-  function isObject(val: any) {
-    return val !== null && typeof val === 'object'
-  }
-
-  function brandTag(val: any): string {
-    return Object.prototype.toString.call(val)
-  }
-
-  function isTypedArray(val: any): boolean {
-    return typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView && ArrayBuffer.isView(val)
-  }
-
-  function isStructuredClonePassThrough(val: any): boolean {
-    const tag = brandTag(val)
-    // Broadly supported structured-clone types
-    if (tag === '[object Date]' || tag === '[object RegExp]' || tag === '[object ArrayBuffer]' || tag === '[object DataView]' || tag === '[object Blob]' || tag === '[object File]' || tag === '[object ImageData]') {
-      return true
-    }
-    if (tag === '[object Map]' || tag === '[object Set]') return true
-    if (isTypedArray(val)) return true
-    return false
-  }
-
-  // 列出“可读取”的键：
-  // - 包含自身可枚举属性（Object.keys）
-  // - 包含自身的非枚举 accessor 属性（descriptor.get 存在）
-  // - 包含原型链上的 accessor 属性（descriptor.get 存在，排除 constructor）
-  // 说明：不把原型链上的数据属性/方法（value:function）作为值快照键，避免把类方法误当作普通字段；
-  // getter 会以“当前值”被读取并进入值快照。
-  function listReadableKeys(obj: any): string[] {
-    if (!isObject(obj)) return []
-    // 结构化直传的内置对象不遍历其键
-    if (isStructuredClonePassThrough(obj)) return []
-    const set = new Set<string>()
-    // 自身可枚举属性
-    for (const k of Object.keys(obj)) set.add(k)
-    // 自身非枚举 accessor 属性
-    try {
-      for (const k of Object.getOwnPropertyNames(obj)) {
-        if (set.has(k)) continue
-        const desc = Object.getOwnPropertyDescriptor(obj, k)
-        if (desc && typeof desc.get === 'function') set.add(k)
-      }
-    } catch {}
-    // 原型链上的 accessor 属性（排除 Object.prototype）
-    try {
-      let proto = Object.getPrototypeOf(obj)
-      while (proto && proto !== Object.prototype) {
-        for (const k of Object.getOwnPropertyNames(proto)) {
-          if (k === 'constructor' || set.has(k)) continue
-          const desc = Object.getOwnPropertyDescriptor(proto, k)
-          if (desc && typeof desc.get === 'function') set.add(k)
-        }
-        proto = Object.getPrototypeOf(proto)
-      }
-    } catch {}
-    return Array.from(set)
-  }
-
-  // 为函数路径收集列出候选键：
-  // - 自身可枚举属性 + accessor（与 listReadableKeys 一致）
-  // - 原型链上的“数据属性为函数”的键（排除 constructor、排除 Object.prototype）
-  function listFunctionKeysForCollect(obj: any): string[] {
-    if (!isObject(obj)) return []
-    if (isStructuredClonePassThrough(obj)) return []
-    const set = new Set<string>()
-    for (const k of listReadableKeys(obj)) set.add(k)
-    try {
-      let proto = Object.getPrototypeOf(obj)
-      while (proto && proto !== Object.prototype) {
-        for (const k of Object.getOwnPropertyNames(proto)) {
-          if (k === 'constructor' || set.has(k)) continue
-          const desc = Object.getOwnPropertyDescriptor(proto, k)
-          if (desc && typeof desc.value === 'function') set.add(k)
-        }
-        proto = Object.getPrototypeOf(proto)
-      }
-    } catch {}
-    return Array.from(set)
-  }
-
-  function collectFunctionPaths(obj: any, base: string[] = [], out: string[] = [], visited: WeakSet<object> = new WeakSet()) {
-    if (!isObject(obj)) return out
-    // 避免循环引用导致的无限递归
-    if (visited.has(obj)) return out
-    visited.add(obj as object)
-    // 遍历自身键、accessor 以及原型链上的方法键
-    for (const key of listFunctionKeysForCollect(obj)) {
-      let v: any
-      try { v = Reflect.get(obj as any, key) } catch { continue }
-      const path = [...base, key]
-      if (typeof v === 'function') out.push(path.join('.'))
-      else if (isObject(v)) collectFunctionPaths(v, path, out, visited)
-    }
-    return out
-  }
-
-  function cloneValuesOnly(obj: any, seen: WeakMap<object, any> = new WeakMap()): any {
-    if (typeof obj === 'function') return undefined
-    if (!isObject(obj)) return obj
-    // Structured-clone builtins: preserve brand, sanitize entries where applicable
-    if (isStructuredClonePassThrough(obj)) {
-      const tag = brandTag(obj)
-      // 处理循环引用：复用已克隆对象/占位
-      const existing = seen.get(obj as object)
-      if (existing) return existing
-      if (tag === '[object Map]') {
-        const outMap = new Map<any, any>()
-        seen.set(obj as object, outMap)
-        ;(obj as Map<any, any>).forEach((v, k) => {
-          const ck = cloneValuesOnly(k, seen)
-          const cv = cloneValuesOnly(v, seen)
-          outMap.set(ck, cv)
-        })
-        return outMap
-      }
-      if (tag === '[object Set]') {
-        const outSet = new Set<any>()
-        seen.set(obj as object, outSet)
-        ;(obj as Set<any>).forEach((v) => {
-          const cv = cloneValuesOnly(v, seen)
-          outSet.add(cv)
-        })
-        return outSet
-      }
-      // TypedArray / ArrayBuffer / DataView / Date / RegExp / Blob / File / ImageData: pass-through
-      seen.set(obj as object, obj)
-      return obj
-    }
-    // 处理循环引用：复用已克隆对象
-    const existing = seen.get(obj as object)
-    if (existing) return existing
-    if (Array.isArray(obj)) {
-      const outArr: any[] = []
-      seen.set(obj as object, outArr)
-      for (let i = 0; i < obj.length; i++) {
-        outArr[i] = cloneValuesOnly(obj[i], seen)
-      }
-      return outArr
-    }
-    const outObj: Record<string, any> = {}
-    seen.set(obj as object, outObj)
-    // 自身枚举属性 + getter（自身与原型链）
-    for (const key of listReadableKeys(obj)) {
-      let v: any
-      try { v = Reflect.get(obj as any, key) } catch { continue }
-      if (typeof v === 'function') continue
-      outObj[key] = cloneValuesOnly(v, seen)
-    }
-    return outObj
-  }
-
-  const values: Record<string, any> = cloneValuesOnly(api)
-  const functions: string[] = collectFunctionPaths(api)
-
-  function serializeError(err: unknown): string {
-    if (err instanceof Error) return err.message
-    try {
-      return JSON.stringify(err)
-    } catch {
-      return String(err)
-    }
-  }
-
-  function sendReady(to: Window, toOrigin?: string) {
-    const msg: RpcMessage = {
-      rpc: 'iframe-rpc',
-      name,
-      type: 'READY',
-      payload: { values, functions },
-    }
-    to.postMessage(msg, toOrigin ?? targetOrigin)
-  }
-
-  function serializeResult(result: any): any {
-    // If result is a function or contains functions, wrap it as a handle
-    const hasFunctions = typeof result === 'function' || (isObject(result) && collectFunctionPaths(result).length > 0)
-    if (!hasFunctions) return result
-    const id = genId()
-    handles.set(id, result)
-    handleMeta.set(id, { lastUsed: Date.now() })
-    if (typeof result === 'function') {
-      return { __rpc__: 'handle', id, kind: 'function' }
-    }
-    return {
-      __rpc__: 'handle',
-      id,
-      kind: 'object',
-      values: cloneValuesOnly(result),
-      functions: collectFunctionPaths(result),
-    }
-  }
-
-  // 初始广播：通知父窗口此 RPC 服务已就绪
-  try {
-    if (window.parent && window.parent !== window) {
-      sendReady(window.parent, targetOrigin)
-    }
-  } catch (err) {
     try {
       if (window.parent && window.parent !== window) {
-        const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'INIT_ERROR', error: serializeError(err) }
-        window.parent.postMessage(msg, targetOrigin)
+        this.sendReady(window.parent, this.targetOrigin)
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      try {
+        if (window.parent && window.parent !== window) {
+          const msg: RpcMessage = { rpc: 'iframe-rpc', name: this.name, type: 'INIT_ERROR', error: serializeError(err) }
+          window.parent.postMessage(msg, this.targetOrigin)
+        }
+      } catch {}
     }
+
+    window.addEventListener('message', this.onMessage)
+    if (this.ttlMs > 0 && this.sweepMs > 0) this.startSweeper()
   }
 
-  window.addEventListener('message', async (event: MessageEvent) => {
-    // 校验来源 origin
-    if (!isOriginAllowed(event.origin)) {
-      try { console.warn(`[rpc-server:${name}] blocked message from disallowed origin: ${event.origin}`) } catch {}
+  
+
+  /**
+   * 发送 READY 消息给客户端，携带值快照与函数路径，完成握手。
+   */
+  private sendReady(to: Window, toOrigin?: string) {
+    const msg: RpcMessage = {
+      rpc: 'iframe-rpc',
+      name: this.name,
+      type: 'READY',
+      payload: { values: this.values, functions: this.functions },
+    }
+    to.postMessage(msg, toOrigin ?? this.targetOrigin)
+  }
+
+  /**
+   * 序列化函数调用结果：
+   * - 若无函数，则直接返回原值；
+   * - 若包含函数或本身为函数，则注册句柄并返回句柄载荷，供客户端后续调用。
+   */
+  private serializeResult(result: any): any {
+    const hasFunctions = typeof result === 'function' || (isObject(result) && collectFunctionPaths(result).length > 0)
+    if (!hasFunctions) return result
+      const id = genId()
+    this.handles.set(id, result)
+    this.handleMeta.set(id, { lastUsed: Date.now() })
+    if (typeof result === 'function') return { __rpc__: 'handle', id, kind: 'function' }
+    return { __rpc__: 'handle', id, kind: 'object', values: cloneValuesOnly(result), functions: collectFunctionPaths(result) }
+  }
+
+  /**
+   * 消息处理入口：
+   * - 过滤不允许来源的消息；
+   * - 处理 GET：向请求源回发 READY；
+   * - 处理 CALL：定位方法并执行，返回 RESULT 或 ERROR；
+   * - 处理 RELEASE_HANDLE：移除对应句柄与元数据。
+   */
+  private onMessage = async (event: MessageEvent) => {
+    if (!this.isOriginAllowed(event.origin)) {
+      try { console.warn(`[rpc-server:${this.name}] blocked message from disallowed origin: ${event.origin}`) } catch {}
       return
     }
     const data: RpcMessage | any = event.data
-    if (!data || data.rpc !== 'iframe-rpc' || data.name !== name) return
-
-    // 仅处理来自父窗口的请求
+    if (!data || data.rpc !== 'iframe-rpc' || data.name !== this.name) return
     const source = event.source as Window | null
     if (!source) return
 
     if (data.type === 'GET') {
-      sendReady(source, event.origin)
+      this.sendReady(source, event.origin)
       return
     }
 
     if (data.type === 'CALL') {
       const { id, method, args, handle } = data
-      function getDeep(obj: any, path: string) {
-        const parts = path.split('.')
-        let cur = obj
-        for (const p of parts) {
-          if (!cur) return undefined
-          cur = cur[p]
-        }
-        return cur
-      }
-      // Determine call context: root API or a returned handle
-      const ctx = handle ? handles.get(handle) : api
+      const ctx = handle ? this.handles.get(handle) : this.api
       if (handle && !ctx) {
-        try { console.log(`[rpc-server:${name}] call on missing handle ${handle}`) } catch {}
+        try { console.log(`[rpc-server:${this.name}] call on missing handle ${handle}`) } catch {}
         const errMsg = `Handle ${handle} not found`
-        const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'ERROR', id, error: errMsg }
+        const msg: RpcMessage = { rpc: 'iframe-rpc', name: this.name, type: 'ERROR', id, error: errMsg }
         source.postMessage(msg, event.origin)
         return
       }
-      // Update last-used timestamp for handle on every call
       if (handle) {
-        const meta = handleMeta.get(handle)
+        const meta = this.handleMeta.get(handle)
         if (meta) meta.lastUsed = Date.now()
       }
       let fn: any
@@ -342,17 +162,17 @@ export function createIframeRpcServer<TApi extends Record<string, any>>(api: TAp
       }
       if (typeof fn !== 'function') {
         const errMsg = `Method ${method || '<root>'} not found`
-        const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'ERROR', id, error: errMsg }
+        const msg: RpcMessage = { rpc: 'iframe-rpc', name: this.name, type: 'ERROR', id, error: errMsg }
         source.postMessage(msg, event.origin)
         return
       }
       try {
         const result = await Promise.resolve(fn.apply(callThis, args))
-        const serialized = serializeResult(result)
-        const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'RESULT', id, result: serialized }
+        const serialized = this.serializeResult(result)
+        const msg: RpcMessage = { rpc: 'iframe-rpc', name: this.name, type: 'RESULT', id, result: serialized }
         source.postMessage(msg, event.origin)
       } catch (err) {
-        const msg: RpcMessage = { rpc: 'iframe-rpc', name, type: 'ERROR', id, error: serializeError(err) }
+        const msg: RpcMessage = { rpc: 'iframe-rpc', name: this.name, type: 'ERROR', id, error: serializeError(err) }
         source.postMessage(msg, event.origin)
       }
       return
@@ -361,24 +181,31 @@ export function createIframeRpcServer<TApi extends Record<string, any>>(api: TAp
     if (data.type === 'RELEASE_HANDLE') {
       const id = data.handle
       if (id) {
-        handles.delete(id)
-        handleMeta.delete(id)
+        this.handles.delete(id)
+        this.handleMeta.delete(id)
       }
       return
     }
-  })
+  }
 
-  // Periodic sweeper to evict idle handles based on TTL
-  if (ttlMs > 0 && sweepMs > 0) {
+  /**
+   * 启动句柄 TTL 清扫器：定时扫描并驱逐长时间未使用的句柄。
+   */
+  private startSweeper() {
     setInterval(() => {
       const now = Date.now()
-      for (const [id, meta] of handleMeta.entries()) {
-        if (now - meta.lastUsed > ttlMs) {
-          try { console.log(`[rpc-server:${name}] evict handle ${id} due to ttl ${ttlMs}ms`) } catch {}
-          handleMeta.delete(id)
-          handles.delete(id)
+      for (const [id, meta] of this.handleMeta.entries()) {
+        if (now - meta.lastUsed > this.ttlMs) {
+          try { console.log(`[rpc-server:${this.name}] evict handle ${id} due to ttl ${this.ttlMs}ms`) } catch {}
+          this.handleMeta.delete(id)
+          this.handles.delete(id)
         }
       }
-    }, sweepMs)
+    }, this.sweepMs)
   }
+}
+
+/** 保持原 API：工厂函数侧效构建服务端并就绪，不返回实例 */
+export function createIframeRpcServer<TApi extends Record<string, any>>(api: TApi, options: CreateIframeRpcServerOptions) {
+  new IframeRpcServer<TApi>(api, options)
 }

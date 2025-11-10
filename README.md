@@ -32,6 +32,24 @@
 
 本仓库本地开发示例直接从源码引入（见 `demo/main.ts` 与 `demo/iframe-main.ts`），用于快速调试。
 
+## 仓库结构与共享模块
+
+- `packages/iframe-rpc-client/`：客户端实现与打包配置
+- `packages/iframe-rpc-server/`：服务端实现与打包配置
+- `shared/`：双端内部共享的类型与工具（非对外 API）
+  - `shared/types.ts`：`RpcMessage`、`StructuredCloneValue`、`Promisified<T>`、客户端/服务端配置项等公共类型定义
+  - `shared/utils.ts`：基础工具函数，供双端复用（如 `isObject`、`brandTag`、`isTypedArray`、`genId`、`isStructuredClonePassThrough`、`getDeep`、`serializeError`、`listReadableKeys`、`listFunctionKeysForCollect`、`collectFunctionPaths`、`cloneValuesOnly`、`buildCanonicalIndex`）
+- `tests/`：单元与集成测试
+  - `utils.test.ts` 覆盖共享工具的全部导出方法
+  - `rpc.test.ts` 覆盖握手、值快照、函数路径、句柄释放、并发、生命周期与跨域校验
+- `demo/`：本地调试用示例页面与脚本
+
+说明：外部使用请通过 npm 包导出的 API（`iframe-rpc-client` / `iframe-rpc-server`）。`shared/` 目录为 monorepo 内部实现细节，不作为对外稳定接口。
+
+### ID 生成策略（内部）
+
+双端统一使用 `shared/utils.ts` 中的 `genId()` 生成唯一 ID（时间戳 + 随机段），确保并发调用按 `id` 正确关联结果。若需更强唯一性（跨多进程/更低碰撞率），可在内部替换为 `crypto.getRandomValues` 或扩展随机段长度。
+
 ## 快速开始
 
 ### 在 iframe 内注册服务（server）
