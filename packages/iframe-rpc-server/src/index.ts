@@ -74,7 +74,7 @@ export class IframeRpcServer<TApi extends Record<string, any>> {
           const msg: RpcMessage = { rpc: 'iframe-rpc', name: this.name, type: 'INIT_ERROR', error: serializeError(err) }
           window.parent.postMessage(msg, this.targetOrigin)
         }
-      } catch {}
+      } catch { /* intentionally empty: postMessage may be blocked or unavailable */ }
     }
 
     window.addEventListener('message', this.onMessage)
@@ -120,7 +120,7 @@ export class IframeRpcServer<TApi extends Record<string, any>> {
    */
   private onMessage = async (event: MessageEvent) => {
     if (!this.isOriginAllowed(event.origin)) {
-      try { console.warn(`[rpc-server:${this.name}] blocked message from disallowed origin: ${event.origin}`) } catch {}
+      try { console.warn(`[rpc-server:${this.name}] blocked message from disallowed origin: ${event.origin}`) } catch { /* intentionally empty: console may be disabled */ }
       return
     }
     const data: RpcMessage | any = event.data
@@ -137,7 +137,7 @@ export class IframeRpcServer<TApi extends Record<string, any>> {
       const { id, method, args, handle } = data
       const ctx = handle ? this.handles.get(handle) : this.api
       if (handle && !ctx) {
-        try { console.log(`[rpc-server:${this.name}] call on missing handle ${handle}`) } catch {}
+        try { console.log(`[rpc-server:${this.name}] call on missing handle ${handle}`) } catch { /* intentionally empty: console may be disabled */ }
         const errMsg = `Handle ${handle} not found`
         const msg: RpcMessage = { rpc: 'iframe-rpc', name: this.name, type: 'ERROR', id, error: errMsg }
         source.postMessage(msg, event.origin)
@@ -196,7 +196,7 @@ export class IframeRpcServer<TApi extends Record<string, any>> {
       const now = Date.now()
       for (const [id, meta] of this.handleMeta.entries()) {
         if (now - meta.lastUsed > this.ttlMs) {
-          try { console.log(`[rpc-server:${this.name}] evict handle ${id} due to ttl ${this.ttlMs}ms`) } catch {}
+          try { console.log(`[rpc-server:${this.name}] evict handle ${id} due to ttl ${this.ttlMs}ms`) } catch { /* intentionally empty: console may be disabled */ }
           this.handleMeta.delete(id)
           this.handles.delete(id)
         }

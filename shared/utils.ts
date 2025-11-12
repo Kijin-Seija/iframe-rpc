@@ -111,7 +111,7 @@ export function listReadableKeys(obj: any): string[] {
       const desc = Object.getOwnPropertyDescriptor(obj, k)
       if (desc && typeof desc.get === 'function') set.add(k)
     }
-  } catch {}
+  } catch { /* intentionally empty: property introspection may fail on exotic objects */ }
   try {
     let proto = Object.getPrototypeOf(obj)
     while (proto && proto !== Object.prototype) {
@@ -122,7 +122,7 @@ export function listReadableKeys(obj: any): string[] {
       }
       proto = Object.getPrototypeOf(proto)
     }
-  } catch {}
+  } catch { /* intentionally empty: prototype traversal may fail on exotic objects */ }
   return Array.from(set)
 }
 
@@ -147,7 +147,7 @@ export function listFunctionKeysForCollect(obj: any): string[] {
       }
       proto = Object.getPrototypeOf(proto)
     }
-  } catch {}
+  } catch { /* intentionally empty: prototype traversal may fail on exotic objects */ }
   return Array.from(set)
 }
 

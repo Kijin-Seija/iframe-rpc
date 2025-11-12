@@ -61,7 +61,7 @@ describe('iframe-rpc 集成测试', () => {
     const original = globalThis.window
     try {
       // start client first (parent), then server (child) so READY is received
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<TestApi>('testApi')
 
       ;(globalThis as any).window = child as any
@@ -74,7 +74,7 @@ describe('iframe-rpc 集成测试', () => {
       const r = await myApi.test(1)
       expect(r).toBe(2)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -82,7 +82,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ title: string }>('getter-literal')
 
       ;(globalThis as any).window = child as any
@@ -95,7 +95,7 @@ describe('iframe-rpc 集成测试', () => {
       const client = await clientPromise
       expect(client.title).toBe('Hello Getter')
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -106,7 +106,7 @@ describe('iframe-rpc 集成测试', () => {
       get title() { return 'Proto Getter' }
     }
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ title: string }>('getter-proto')
 
       ;(globalThis as any).window = child as any
@@ -117,7 +117,7 @@ describe('iframe-rpc 集成测试', () => {
       const client = await clientPromise
       expect(client.title).toBe('Proto Getter')
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -125,7 +125,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ secret: number }>('getter-nonenumerable')
 
       ;(globalThis as any).window = child as any
@@ -140,7 +140,7 @@ describe('iframe-rpc 集成测试', () => {
       const client = await clientPromise
       expect(client.secret).toBe(42)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -148,7 +148,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ ok: number }>('getter-throws')
 
       ;(globalThis as any).window = child as any
@@ -164,7 +164,7 @@ describe('iframe-rpc 集成测试', () => {
       expect(client.ok).toBe(1)
       expect((client as any).unstable).toBeUndefined()
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -172,7 +172,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ fail: () => number }>('errApi')
 
       ;(globalThis as any).window = child as any
@@ -183,7 +183,7 @@ describe('iframe-rpc 集成测试', () => {
       const client = await clientPromise
       await expect(client.fail()).rejects.toThrow('boom')
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -191,7 +191,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ add: (a: number, b: number) => number }>('parallel')
 
       ;(globalThis as any).window = child as any
@@ -209,7 +209,7 @@ describe('iframe-rpc 集成测试', () => {
       expect(r2).toBe(7)
       expect(r3).toBe(15)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -217,7 +217,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<TestApi>('nested')
 
       ;(globalThis as any).window = child as any
@@ -237,7 +237,7 @@ describe('iframe-rpc 集成测试', () => {
       const r = await client.nested.test(1)
       expect(r).toBe(11)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -247,7 +247,7 @@ describe('iframe-rpc 集成测试', () => {
     const origPostMessage = parent.postMessage.bind(parent)
     try {
       // 客户端在父窗口
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ x: number }>('bad', { timeout: 1000 })
 
       // 在服务端发送 READY 时模拟结构化克隆失败，仅对 READY 抛错
@@ -277,7 +277,7 @@ describe('iframe-rpc 集成测试', () => {
     const original = globalThis.window
     const origPostMessage = parent.postMessage.bind(parent)
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ y: number }>('timeout', { timeout: 50 })
 
       // 模拟 READY 与 INIT_ERROR 都无法送达（postMessage 总是抛错）
@@ -301,7 +301,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<TestApi>('nested-return')
 
       ;(globalThis as any).window = child as any
@@ -325,7 +325,7 @@ describe('iframe-rpc 集成测试', () => {
       const r = await obj.test(1)
       expect(r).toBe(1001)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -333,7 +333,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ testPromise: (n: number) => Promise<number> }>('promise-prim')
 
       ;(globalThis as any).window = child as any
@@ -345,7 +345,7 @@ describe('iframe-rpc 集成测试', () => {
       const r = await client.testPromise(1)
       expect(r).toBe(2)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -353,7 +353,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ mkObjAsync: (seed: number) => Promise<{ a: number; test: (n: number) => number }> }>('promise-obj')
 
       ;(globalThis as any).window = child as any
@@ -369,7 +369,7 @@ describe('iframe-rpc 集成测试', () => {
       const r = await obj.test(2)
       expect(r).toBe(7)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -377,7 +377,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ mkAdderAsync: (x: number) => Promise<(y: number) => number> }>('promise-fn')
 
       ;(globalThis as any).window = child as any
@@ -392,7 +392,7 @@ describe('iframe-rpc 集成测试', () => {
       const r = await add2(3)
       expect(r).toBe(5)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -400,7 +400,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{
         d: Date
         r: RegExp
@@ -431,7 +431,7 @@ describe('iframe-rpc 集成测试', () => {
       expect(client.ta instanceof Uint8Array).toBe(true)
       expect(client.ta[0]).toBe(1)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -439,7 +439,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{
         mkMixed: (seed: number) => {
           val: number
@@ -482,7 +482,7 @@ describe('iframe-rpc 集成测试', () => {
       const r = await obj.test(2)
       expect(r).toBe(7)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -490,7 +490,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ mkAdder: (x: number) => (y: number) => number }>('fnfn')
 
       ;(globalThis as any).window = child as any
@@ -507,7 +507,7 @@ describe('iframe-rpc 集成测试', () => {
       const r = await add2(3)
       expect(r).toBe(5)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -515,7 +515,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<TestApi>('release-obj')
 
       ;(globalThis as any).window = child as any
@@ -539,7 +539,7 @@ describe('iframe-rpc 集成测试', () => {
       // after release, further calls should error
       await expect(obj.test(1)).rejects.toThrow('Handle')
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -547,7 +547,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ mkAdder: (x: number) => (y: number) => number }>('release-fn')
 
       ;(globalThis as any).window = child as any
@@ -562,7 +562,7 @@ describe('iframe-rpc 集成测试', () => {
       ;(add2 as any).__release()
       await expect(add2(3)).rejects.toThrow('Handle')
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -577,7 +577,7 @@ describe('iframe-rpc 集成测试', () => {
       deref() { return (MockWeakRef.forceNull ? undefined : this.obj) as any }
     }
     try {
-      ;(globalThis as any).WeakRef = MockWeakRef as any
+      (globalThis as any).WeakRef = MockWeakRef as any
       ;(globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<TestApi>('weakref-release', { gcSweepIntervalMs: 10 })
 
@@ -603,7 +603,7 @@ describe('iframe-rpc 集成测试', () => {
       await new Promise((res) => setTimeout(res, 20))
       await expect(obj.test(1)).rejects.toThrow('Handle')
     } finally {
-      ;(globalThis as any).WeakRef = originalWeakRef
+      (globalThis as any).WeakRef = originalWeakRef
       ;(globalThis as any).window = original
     }
   })
@@ -612,7 +612,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<TestApi>('pagehide-release')
 
       ;(globalThis as any).window = child as any
@@ -635,7 +635,7 @@ describe('iframe-rpc 集成测试', () => {
       parent.dispatch('pagehide', { persisted: false })
       await expect(obj.test(1)).rejects.toThrow('Handle')
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -643,7 +643,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<TestApi>('pagehide-nonpersisted-default')
 
       ;(globalThis as any).window = child as any
@@ -667,7 +667,7 @@ describe('iframe-rpc 集成测试', () => {
       const r2 = await obj.test(1)
       expect(r2).toBe(6)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -675,7 +675,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<TestApi>('pagehide-all', { releaseOnPageHide: 'all' })
 
       ;(globalThis as any).window = child as any
@@ -698,7 +698,7 @@ describe('iframe-rpc 集成测试', () => {
       parent.dispatch('pagehide', { persisted: true })
       await expect(obj.test(1)).rejects.toThrow('Handle')
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -706,7 +706,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<TestApi>('pagehide-off', { releaseOnPageHide: 'off' })
 
       ;(globalThis as any).window = child as any
@@ -730,7 +730,7 @@ describe('iframe-rpc 集成测试', () => {
       const r2 = await obj.test(1)
       expect(r2).toBe(6)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -738,7 +738,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<TestApi>('rpc-ttl')
 
       ;(globalThis as any).window = child as any
@@ -764,7 +764,7 @@ describe('iframe-rpc 集成测试', () => {
       // 过期后再次调用应报错（服务端返回 Handle not found）
       await expect(obj.test(1)).rejects.toThrow('Handle')
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -772,7 +772,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ arr: any[] }>('array-root')
 
       ;(globalThis as any).window = child as any
@@ -794,7 +794,7 @@ describe('iframe-rpc 集成测试', () => {
       const r2 = await (client.arr as any)[2].inner(1)
       expect(r2).toBe(101)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -802,7 +802,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ mkArr: (seed: number) => any[] }>('array-return')
 
       ;(globalThis as any).window = child as any
@@ -822,7 +822,7 @@ describe('iframe-rpc 集成测试', () => {
       const r1 = await arr[1].inner(1)
       expect(r1).toBe(21)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -830,7 +830,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ cycle: any }>('cycle-root')
 
       ;(globalThis as any).window = child as any
@@ -849,7 +849,7 @@ describe('iframe-rpc 集成测试', () => {
       const r = await client.cycle.nested.fn(2)
       expect(r).toBe(3)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -857,7 +857,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ mkCyclic: (seed: number) => any }>('cycle-return')
 
       ;(globalThis as any).window = child as any
@@ -882,7 +882,7 @@ describe('iframe-rpc 集成测试', () => {
       const r = await obj.nested.fn(5)
       expect(r).toBe(15)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -890,7 +890,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<TestApi>('materialize-object', { hideStructure: true })
 
       ;(globalThis as any).window = child as any
@@ -914,7 +914,7 @@ describe('iframe-rpc 集成测试', () => {
       const r = await obj.test(1)
       expect(r).toBe(1001)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -922,7 +922,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ mkArr: (seed: number) => any[] }>('materialize-array', { hideStructure: true })
 
       ;(globalThis as any).window = child as any
@@ -945,7 +945,7 @@ describe('iframe-rpc 集成测试', () => {
       expect(k.includes('0')).toBe(false)
       expect(k.includes('1')).toBe(false)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -953,7 +953,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ mkCyclic: (seed: number) => any }>('materialize-cycle', { hideStructure: true })
 
       ;(globalThis as any).window = child as any
@@ -976,7 +976,7 @@ describe('iframe-rpc 集成测试', () => {
       const r = await obj.self.nested.fn(5)
       expect(r).toBe(15)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -984,7 +984,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<TestApi>('materialize-release', { hideStructure: true })
 
       ;(globalThis as any).window = child as any
@@ -1006,7 +1006,7 @@ describe('iframe-rpc 集成测试', () => {
       ;(obj as any).__release()
       await expect(obj.test(1)).rejects.toThrow('Handle')
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -1014,7 +1014,7 @@ describe('iframe-rpc 集成测试', () => {
     const { parent, child } = createPair()
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ a: any }>('class-methods')
 
       ;(globalThis as any).window = child as any
@@ -1035,7 +1035,7 @@ describe('iframe-rpc 集成测试', () => {
       const rBar = await client.a.bar()
       expect(rBar).toBe(5)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -1049,7 +1049,7 @@ describe('iframe-rpc 集成测试', () => {
     parent.parent = parent
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ a: number }>('origin-ok', { allowedOrigins: ['http://child.example'] })
       ;(globalThis as any).window = child as any
       const api = { a: 1 }
@@ -1058,7 +1058,7 @@ describe('iframe-rpc 集成测试', () => {
       const client = await clientPromise
       expect(client.a).toBe(1)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -1071,7 +1071,7 @@ describe('iframe-rpc 集成测试', () => {
     parent.parent = parent
     const original = globalThis.window
     try {
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ a: number }>('origin-block', { allowedOrigins: ['http://evil.example'], timeout: 50 })
       ;(globalThis as any).window = child as any
       const api = { a: 1 }
@@ -1079,7 +1079,7 @@ describe('iframe-rpc 集成测试', () => {
       ;(globalThis as any).window = parent as any
       await expect(clientPromise).rejects.toThrow('initialization timeout')
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 
@@ -1093,7 +1093,7 @@ describe('iframe-rpc 集成测试', () => {
     const original = globalThis.window
     try {
       // 允许的来源：parent.example
-      ;(globalThis as any).window = parent as any
+      (globalThis as any).window = parent as any
       const clientPromise = createIframeRpcClient<{ add: (a: number, b: number) => number }>('srv-origin')
       ;(globalThis as any).window = child as any
       const api = { add: (a: number, b: number) => a + b }
@@ -1103,7 +1103,7 @@ describe('iframe-rpc 集成测试', () => {
       const r = await client.add(3, 4)
       expect(r).toBe(7)
     } finally {
-      ;(globalThis as any).window = original
+      (globalThis as any).window = original
     }
   })
 })

@@ -17,7 +17,7 @@ function log(msg: string) {
   logEl.appendChild(p)
 }
 
-;(async () => {
+(async () => {
   const myApi = await createIframeRpcClient<TestApi>('testApi')
   ;(window as any).api = myApi
   log('window.api = myApi')

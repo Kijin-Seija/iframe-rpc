@@ -60,11 +60,6 @@ export class IframeRpcClient<TApi extends Record<string, any>> {
   }
 
   /**
-   * 生成唯一的请求 ID，用于 RPC 消息关联。
-   */
-  
-
-  /**
    * 计算 postMessage 的目标 origin。
    * 优先使用传入配置的 targetOrigin，其次服务端的实际来源，最后回退 '*'
    */
@@ -97,7 +92,7 @@ export class IframeRpcClient<TApi extends Record<string, any>> {
     const tw = this.targetWindow
     if (!tw) return
     const msg: RpcMessage = { rpc: 'iframe-rpc', name: this.name, type: 'RELEASE_HANDLE', handle: handleId }
-    try { tw.postMessage(msg, this.destinationOrigin()) } catch {}
+    try { tw.postMessage(msg, this.destinationOrigin()) } catch { /* intentionally empty: postMessage may be blocked or unavailable */ }
   }
 
   /**
@@ -175,7 +170,7 @@ export class IframeRpcClient<TApi extends Record<string, any>> {
       if (!tw) return Promise.reject(new Error('RPC target not ready'))
     const id = genId()
       const msg: RpcMessage = { rpc: 'iframe-rpc', name: this.name, type: 'CALL', id, method, args }
-      try { console.log(`[rpc-client:${this.name}] CALL root method=${method} id=${id}`) } catch {}
+      try { console.log(`[rpc-client:${this.name}] CALL root method=${method} id=${id}`) } catch { /* intentionally empty: console may be disabled */ }
       return new Promise((resolve, reject) => {
         this.pending.set(id, { resolve, reject })
         tw.postMessage(msg, this.destinationOrigin())
@@ -304,7 +299,7 @@ export class IframeRpcClient<TApi extends Record<string, any>> {
         if (!tw) return Promise.reject(new Error('RPC target not ready'))
     const id = genId()
         const msg: RpcMessage = { rpc: 'iframe-rpc', name: this.name, type: 'CALL', id, method, args, handle: handleId }
-        try { console.log(`[rpc-client:${this.name}] CALL handle=${handleId} method=${method} id=${id}`) } catch {}
+        try { console.log(`[rpc-client:${this.name}] CALL handle=${handleId} method=${method} id=${id}`) } catch { /* intentionally empty: console may be disabled */ }
         return new Promise((resolve, reject) => {
           this.pending.set(id, { resolve, reject })
           tw.postMessage(msg, this.destinationOrigin())
@@ -421,7 +416,7 @@ export class IframeRpcClient<TApi extends Record<string, any>> {
         if (!tw) return Promise.reject(new Error('RPC target not ready'))
     const id = genId()
         const msg: RpcMessage = { rpc: 'iframe-rpc', name: this.name, type: 'CALL', id, method, args, handle: handleId }
-        try { console.log(`[rpc-client:${this.name}] CALL handle=${handleId} method=${method} id=${id}`) } catch {}
+        try { console.log(`[rpc-client:${this.name}] CALL handle=${handleId} method=${method} id=${id}`) } catch { /* intentionally empty: console may be disabled */ }
         return new Promise((resolve, reject) => {
           this.pending.set(id, { resolve, reject })
           tw.postMessage(msg, '*')
@@ -435,9 +430,9 @@ export class IframeRpcClient<TApi extends Record<string, any>> {
       const parentObj = ensureTargetForParentPathLocal(parentPath)
       parentObj[leafKey] = makeHandleFunctionProxy(method)
     }
-    ;(root as any).__release = () => this.releaseHandle(handleId)
+    (root as any).__release = () => this.releaseHandle(handleId)
     if (this.FinalReg) {
-      try { this.FinalReg.register(root, handleId) } catch {}
+      try { this.FinalReg.register(root, handleId) } catch { /* intentionally empty: FinalizationRegistry may throw in some environments */ }
     }
     if (this.weakRefAvailable) this.activeHandles.set(handleId, { weakRef: new WeakRef(root) })
     this.startWeakRefSweeper()
@@ -469,7 +464,7 @@ export class IframeRpcClient<TApi extends Record<string, any>> {
           })
         }
         ;(fn as any).__release = () => this.releaseHandle(id)
-        if (this.FinalReg) { try { this.FinalReg.register(fn, id) } catch {} }
+        if (this.FinalReg) { try { this.FinalReg.register(fn, id) } catch { /* intentionally empty: FinalizationRegistry may throw in some environments */ } }
         if (this.weakRefAvailable) this.activeHandles.set(id, { weakRef: new WeakRef(fn) })
         this.startWeakRefSweeper()
         return fn
@@ -515,7 +510,7 @@ export class IframeRpcClient<TApi extends Record<string, any>> {
           return
         }
         if (data.type === 'ERROR') {
-          try { console.log(`[rpc-client:${this.name}] ERROR id=${data.id} msg=${data.error} hasPending=${this.pending.has(data.id)}`) } catch {}
+          try { console.log(`[rpc-client:${this.name}] ERROR id=${data.id} msg=${data.error} hasPending=${this.pending.has(data.id)}`) } catch { /* intentionally empty: console may be disabled */ }
           const p = this.pending.get(data.id)
           if (p) {
             p.reject(new Error(data.error))
@@ -539,7 +534,7 @@ export class IframeRpcClient<TApi extends Record<string, any>> {
         window.addEventListener('beforeunload', this.onShutdown)
         window.addEventListener('pagehide', this.pagehideHandler)
         this.startWeakRefSweeper()
-      } catch {}
+      } catch { /* intentionally empty: event listeners may be unavailable in this environment */ }
     })
   }
 }

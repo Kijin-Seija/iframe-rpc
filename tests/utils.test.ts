@@ -154,7 +154,7 @@ describe('cloneValuesOnly', () => {
   })
   it('clones Map deeply', () => {
     const m = new Map<any, any>([[{ a: 1 }, { b: 2, f() {} }]])
-    const cloned = cloneValuesOnly(m)
+    const cloned = cloneValuesOnly(m) as Map<unknown, unknown>
     expect(cloned).not.toBe(m)
     const entries = Array.from(cloned.entries())
     expect(entries.length).toBe(1)
