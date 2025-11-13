@@ -1,11 +1,11 @@
-import { createIframeRpcClient } from '../packages/iframe-rpc-client/src/index'
+import { createIframeRpcClient } from '../../packages/iframe-rpc-client/src/index'
 import type { TestApi } from './types'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 app.innerHTML = `
   <div>
     <h1>iframe-rpc 调试页（外层）</h1>
-    <iframe id="demo-iframe" src="http://localhost:9098/sample/1" style="width:100%;height:160px;border:1px solid #ccc"></iframe>
+    <iframe id="demo-iframe" src="/iframe.html" style="width:100%;height:160px;border:1px solid #ccc"></iframe>
     <div id="log" style="margin-top:12px"></div>
   </div>
 `

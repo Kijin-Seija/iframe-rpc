@@ -2,7 +2,7 @@ import { defineConfig } from 'vite'
 
 // 库模式构建配置：仅打包 src/index.ts 为库输出
 export default defineConfig({
-  root: 'demo',
+  root: 'demo/simple',
   publicDir: '../public',
   test: {
     environment: 'node',

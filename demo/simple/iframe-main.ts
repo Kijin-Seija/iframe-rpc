@@ -1,4 +1,4 @@
-import { createIframeRpcServer } from '../packages/iframe-rpc-server/src/index'
+import { createIframeRpcServer } from '../../packages/iframe-rpc-server/src/index'
 import type { TestApi } from './types'
 
 const api: TestApi = {
