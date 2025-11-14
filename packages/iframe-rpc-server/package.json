@@ -1,6 +1,6 @@
 {
   "name": "iframe-rpc-server",
-  "version": "0.1.6",
+  "version": "0.0.7",
   "private": false,
   "type": "module",
   "main": "dist/index.umd.cjs",
