@@ -10,45 +10,23 @@
 ## 特性
 
 - 双包架构：服务端与客户端独立封装，互相解耦
-- 异步初始化：`createIframeRpcClient(name)` 返回 `Promise`，握手完成后解析代理
-- 函数 Promise 化：所有函数调用返回 `Promise<结果>`
-- 简单协议：`READY / GET / CALL / RESULT / ERROR`
 - 支持并发：多个调用互不干扰，按 `id` 关联结果
- - Getter 值支持：服务端在构建“值快照”时会读取对象上的 getter（包含原型链与非枚举的 getter），并以“当前值”传递到客户端；不保留 getter 的动态语义（不会自动更新）
- - 支持嵌套对象与嵌套返回：值深度复刻（剔除函数），函数以“点路径”暴露（如 `nested.test`）；同时支持“函数返回对象（包含函数）”“函数返回函数”等场景，客户端会为返回值创建临时代理并继续调用
- - 初始化错误提示与超时：服务端初始广播失败会发送 `INIT_ERROR`；客户端支持握手超时（可配置），在失败或超时时明确提示
- - 返回值句柄释放：函数返回对象/函数时会创建“临时句柄”（handle）；支持显式释放与自动释放，避免句柄长期常驻
-
-- 异步返回支持：函数返回 `Promise` 时服务端会自动 `await` 并按当前逻辑处理嵌套结构（对象/函数均可），客户端类型与行为保持一致
-
-- 页面生命周期策略：客户端支持 `releaseOnPageHide: 'nonPersisted' | 'all' | 'off'`（默认 `nonPersisted`）；`beforeunload` 始终批量释放
-- 服务端闲置 TTL 清理：支持配置 `handleTtlMs` 与 `sweepIntervalMs`，对长时间未使用的句柄进行定期回收
+- Getter 值支持：服务端在构建“值快照”时会读取对象上的 getter（包含原型链与非枚举的 getter），并以“当前值”传递到客户端；不保留 getter 的动态语义（不会自动更新）
+- 支持嵌套对象与嵌套返回：值深度复刻（剔除函数），函数以“点路径”暴露（如 `nested.test`）；同时支持“函数返回对象（包含函数）”“函数返回函数”等场景，客户端会为返回值创建临时代理并继续调用
+- 完善的调用回收系统：
+  - 返回值句柄释放：函数返回对象/函数时会创建“临时句柄”（handle）；支持显式释放与自动释放，避免句柄长期常驻
+  - 页面生命周期策略：客户端支持 `releaseOnPageHide: 'nonPersisted' | 'all' | 'off'`（默认 `nonPersisted`）；`beforeunload` 始终批量释放
+  - 服务端闲置 TTL 清理：支持配置 `handleTtlMs` 与 `sweepIntervalMs`，对长时间未使用的句柄进行定期回收
 
 ## 安装
 
-发布到 npm 后：
+服务端：
 
-- `npm install iframe-rpc-client iframe-rpc-server`
+- `npm install iframe-rpc-server`
 
-本仓库本地开发示例直接从源码引入（见 `demo/simple/main.ts` 与 `demo/simple/iframe-main.ts`），用于快速调试。
+客户端：
 
-## 仓库结构与共享模块
-
-- `packages/iframe-rpc-client/`：客户端实现与打包配置
-- `packages/iframe-rpc-server/`：服务端实现与打包配置
-- `shared/`：双端内部共享的类型与工具（非对外 API）
-  - `shared/types.ts`：`RpcMessage`、`StructuredCloneValue`、`Promisified<T>`、客户端/服务端配置项等公共类型定义
-  - `shared/utils.ts`：基础工具函数，供双端复用（如 `isObject`、`brandTag`、`isTypedArray`、`genId`、`isStructuredClonePassThrough`、`getDeep`、`serializeError`、`listReadableKeys`、`listFunctionKeysForCollect`、`collectFunctionPaths`、`cloneValuesOnly`、`buildCanonicalIndex`）
-- `tests/`：单元与集成测试
-  - `utils.test.ts` 覆盖共享工具的全部导出方法
-  - `rpc.test.ts` 覆盖握手、值快照、函数路径、句柄释放、并发、生命周期与跨域校验
-- `demo/`：本地调试用示例页面与脚本
-
-说明：外部使用请通过 npm 包导出的 API（`iframe-rpc-client` / `iframe-rpc-server`）。`shared/` 目录为 monorepo 内部实现细节，不作为对外稳定接口。
-
-### ID 生成策略（内部）
-
-双端统一使用 `shared/utils.ts` 中的 `genId()` 生成唯一 ID（时间戳 + 随机段），确保并发调用按 `id` 正确关联结果。若需更强唯一性（跨多进程/更低碰撞率），可在内部替换为 `crypto.getRandomValues` 或扩展随机段长度。
+- `npm install iframe-rpc-client`
 
 ## 快速开始
 
