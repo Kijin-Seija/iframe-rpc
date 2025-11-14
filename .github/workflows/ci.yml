@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,8 +28,20 @@ jobs:
           MSG=$(git log -1 --pretty=%B)
           if [[ "$MSG" == publish* ]]; then echo "should_publish=true" >> $GITHUB_OUTPUT; else echo "should_publish=false" >> $GITHUB_OUTPUT; fi
 
-      - name: Run tests
-        run: npm run test
+      - name: Run tests with coverage
+        run: npm run test:coverage
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: coverage/lcov.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage/lcov.info
+          fail_ci_if_error: true
 
       - name: Build
         run: npm run build

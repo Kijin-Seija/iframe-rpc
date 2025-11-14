@@ -1,4 +1,5 @@
 # iframe-rpc
+[![build](https://github.com/Kijin-Seija/iframe-rpc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Kijin-Seija/iframe-rpc/actions/workflows/ci.yml) [![coverage](https://codecov.io/gh/Kijin-Seija/iframe-rpc/branch/main/graph/badge.svg)](https://codecov.io/gh/Kijin-Seija/iframe-rpc?branch=main)
 
 基于 `iframe` 的 `postMessage` 双端 RPC 库，让外层页面可以像调用本地函数一样调用 `iframe` 内的函数，并拿到异步结果。项目拆分为两个包：
 
