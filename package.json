@@ -1,7 +1,7 @@
 {
   "name": "iframe-rpc-monorepo",
   "private": true,
-  "version": "..",
+  "version": "0.0.6",
   "type": "module",
   "workspaces": [
     "packages/*"
@@ -14,12 +14,14 @@
     "test:watch": "vitest",
     "lint": "eslint --ext .ts ./shared ./packages ./tests ./demo",
     "lint:fix": "eslint --ext .ts ./shared ./packages ./tests ./demo --fix",
-    "publish:all": "npm run build && npm publish -w iframe-rpc-server && npm publish -w iframe-rpc-client"
+    "publish:all": "npm run build && npm publish -w iframe-rpc-server && npm publish -w iframe-rpc-client",
+    "prepare": "husky install"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
     "eslint": "^8.56.0",
+    "husky": "^9.0.11",
     "typescript": "~5.9.3",
     "vite": "^7.1.7",
     "vitest": "^2.1.4"

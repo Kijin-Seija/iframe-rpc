@@ -23,20 +23,12 @@ jobs:
           registry-url: https://registry.npmjs.org
       - run: npm ci
 
-      - name: Bump versions minor on main (root + client + server)
+      - name: Read version on main
         if: github.ref == 'refs/heads/main'
-        id: bump
+        id: readver
         run: |
-          node -e "const fs=require('fs');const paths=['package.json','packages/iframe-rpc-client/package.json','packages/iframe-rpc-server/package.json'];const root=JSON.parse(fs.readFileSync(paths[0],'utf8'));const [M,m,P]=root.version.split('.').map(Number);const v=\`${M}.${m+1}.${P}\`;for(const p of paths){const j=JSON.parse(fs.readFileSync(p,'utf8'));j.version=v;fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');}console.log(v);fs.writeFileSync('version.txt',v)"
+          node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('package.json','utf8'));fs.writeFileSync('version.txt',j.version)"
           echo "VERSION=$(cat version.txt)" >> $GITHUB_OUTPUT
-      - name: Commit bump
-        if: github.ref == 'refs/heads/main'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add package.json packages/iframe-rpc-client/package.json packages/iframe-rpc-server/package.json
-          git commit -m "v ${{ steps.bump.outputs.VERSION }}"
-          git push
 
       - name: Sync versions to root on release branches
         if: startsWith(github.ref_name, 'release-')
@@ -68,8 +60,8 @@ jobs:
       - name: Create and push tag on main
         if: github.ref == 'refs/heads/main'
         run: |
-          git tag v${{ steps.bump.outputs.VERSION }}
-          git push origin v${{ steps.bump.outputs.VERSION }}
+          git tag v${{ steps.readver.outputs.VERSION }}
+          git push origin v${{ steps.readver.outputs.VERSION }}
 
       - name: Publish both on release branches
         if: startsWith(github.ref_name, 'release-')

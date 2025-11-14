@@ -1,0 +1,12 @@
+#!/usr/bin/env sh
+. "$(dirname "$0")/_/husky.sh"
+branch=$(git rev-parse --abbrev-ref HEAD)
+if [ "$branch" = "main" ]; then
+  node -e "const fs=require('fs');const paths=['package.json','packages/iframe-rpc-client/package.json','packages/iframe-rpc-server/package.json'];const root=JSON.parse(fs.readFileSync(paths[0],'utf8'));const [M,m,P]=root.version.split('.').map(Number);const v=\`${M}.${m+1}.${P}\`;for(const p of paths){const j=JSON.parse(fs.readFileSync(p,'utf8'));j.version=v;fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');}fs.writeFileSync('version.txt',v)"
+  v=$(cat version.txt)
+  git add package.json packages/iframe-rpc-client/package.json packages/iframe-rpc-server/package.json
+  git commit -m "v $v" || true
+  rm -f version.txt
+  echo "version bumped to v $v; please push again"
+  exit 1
+fi
