@@ -1,0 +1,86 @@
+name: ci-publish
+
+on:
+  push:
+    branches:
+      - main
+      - 'release-*'
+
+jobs:
+  test-build-publish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+
+      - name: Bump versions minor on main (root + client + server)
+        if: github.ref == 'refs/heads/main'
+        id: bump
+        run: |
+          node -e "const fs=require('fs');const paths=['package.json','packages/iframe-rpc-client/package.json','packages/iframe-rpc-server/package.json'];const root=JSON.parse(fs.readFileSync(paths[0],'utf8'));const [M,m,P]=root.version.split('.').map(Number);const v=\`${M}.${m+1}.${P}\`;for(const p of paths){const j=JSON.parse(fs.readFileSync(p,'utf8'));j.version=v;fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');}console.log(v);fs.writeFileSync('version.txt',v)"
+          echo "VERSION=$(cat version.txt)" >> $GITHUB_OUTPUT
+      - name: Commit bump
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json packages/iframe-rpc-client/package.json packages/iframe-rpc-server/package.json
+          git commit -m "v ${{ steps.bump.outputs.VERSION }}"
+          git push
+
+      - name: Sync versions to root on release branches
+        if: startsWith(github.ref_name, 'release-')
+        id: sync
+        run: |
+          node -e "const fs=require('fs');const root=JSON.parse(fs.readFileSync('package.json','utf8'));const v=root.version;for(const p of ['packages/iframe-rpc-client/package.json','packages/iframe-rpc-server/package.json']){const j=JSON.parse(fs.readFileSync(p,'utf8'));if(j.version!==v){j.version=v;fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');}}fs.writeFileSync('version.txt',v)"
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add packages/iframe-rpc-client/package.json packages/iframe-rpc-server/package.json
+            git commit -m "v $(cat version.txt)"
+            git push
+          fi
+          echo "VERSION=$(cat version.txt)" >> $GITHUB_OUTPUT
+
+      - name: Run tests
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish client on main
+        if: github.ref == 'refs/heads/main'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm publish -w iframe-rpc-client --access public
+
+      - name: Create and push tag on main
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git tag v${{ steps.bump.outputs.VERSION }}
+          git push origin v${{ steps.bump.outputs.VERSION }}
+
+      - name: Publish both on release branches
+        if: startsWith(github.ref_name, 'release-')
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm publish -w iframe-rpc-server --access public
+          npm publish -w iframe-rpc-client --access public
+
+      - name: Create and push tag on release branches
+        if: startsWith(github.ref_name, 'release-')
+        run: |
+          git tag v${{ steps.sync.outputs.VERSION }}
+          git push origin v${{ steps.sync.outputs.VERSION }}
